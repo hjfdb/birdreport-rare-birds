@@ -94,6 +94,30 @@ jobs:
           $mb = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
           Write-Host "已打包：$zip（$mb MB）"
 
+      - name: 诊断：中文名到底在哪一层丢的（临时，定位后删）
+        shell: bash
+        run: |
+          echo "===== 环境 ====="
+          locale 2>&1 | head -3
+          echo "gh: $(gh --version | head -1)"
+          echo "bash: $BASH_VERSION"
+          echo
+          echo "===== 边界 1：bash 读到的 EXE_NAME ====="
+          printf 'EXE_NAME=[%s]\n' "$EXE_NAME"
+          printf %s "$EXE_NAME" | od -An -tx1 | head -3
+          echo
+          echo "===== 边界 2：bash 展开出的 ZIP_NAME ====="
+          ZIP_NAME="${EXE_NAME%.exe}.zip"
+          printf 'ZIP_NAME=[%s]\n' "$ZIP_NAME"
+          printf %s "$ZIP_NAME" | od -An -tx1 | head -3
+          echo
+          echo "===== 边界 3：磁盘上产物的真实名字 + bash 能否找到它 ====="
+          ls dist/ | cat -A | head -5
+          if test -f "dist/${ZIP_NAME}"; then echo "  能按这个路径找到文件"; else echo "  按这个路径找不到文件"; fi
+          echo
+          echo "===== 边界 4：原生 exe 从 bash 收到的 argv ====="
+          node -e 'const a=process.argv[1]; console.log("  node 收到 =", JSON.stringify(a)); console.log("  字节数 =", Buffer.byteLength(a));' "dist/${ZIP_NAME}"
+
       - name: 发布 Release
         if: github.ref_type == 'tag'
         shell: bash
