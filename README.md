@@ -22,9 +22,9 @@
 
 ### 方式一：直接下载 exe（不用装 Node）
 
-到 **[Releases](../../releases/latest)** 下载 `观鸟地区稀有榜-vX.Y.Z-win-x64.zip`，
-解压出 exe 后双击运行 —— 浏览器会自动打开 <http://127.0.0.1:8787/>，
-关掉那个黑色控制台窗口即停止服务。
+到 **[Releases](../../releases/latest)** 下载 `birdreport-rare-birds-vX.Y.Z-win-x64.zip`，
+解压出 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe` 后双击运行 ——
+浏览器会自动打开 <http://127.0.0.1:8787/>，关掉那个黑色控制台窗口即停止服务。
 缓存落在 exe 同级的 `data/` 目录（该位置不可写时退到用户数据目录）。
 
 > **这个 exe 没有代码签名**：它由 Node 官方 SEA 机制注入生成，注入会让 node.exe 原有的
