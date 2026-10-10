@@ -369,3 +369,60 @@ input[type="search"] { min-width: 200px; }
 .dtable tr.is-jump:hover { background: #f2f8fe; }
 .rep-link { color: var(--primary); text-decoration: none; font-weight: 550; }
 .rep-link:hover { text-decoration: underline; }
+
+/* ---------------- 手机端适配（≤ 720px） ----------------
+   桌面版大量使用横向排列（顶栏、查询条件、记录检索、榜单工具栏），窄屏下会互相挤压甚至
+   溢出；榜单的 156 张卡片又占了整页高度的大头。这里统一收敛为纵向堆叠，并隐去卡片上的
+   次要信息。本块只动样式，不改 HTML / JS。 */
+@media (max-width: 720px) {
+  /* 顶栏：原来是固定 68px 高，副标题在窄屏折成 3 行会把它撑破 —— 而顶栏是 sticky 的，
+     一旦错位会一直跟着滚动。改成自适应高度 + 纵向堆叠。 */
+  .topbar-inner {
+    height: auto; min-height: 54px; padding: 9px 0;
+    flex-direction: column; align-items: flex-start; gap: 5px;
+  }
+  /* 副标题窄屏下要占约 45px 且常驻吸顶，直接省掉（页脚有同源说明） */
+  .brand-sub { display: none; }
+  .topbar-meta { white-space: normal; font-size: 12px; }
+
+  /* 保护等级构成：手机上不显示。该块数据随榜单一起下发、不额外发请求，
+     所以纯 CSS 隐藏没有代价（与侧栏图表不同，那个会触发趋势接口）。 */
+  #protectionPanel { display: none; }
+
+  /* 查询条件：去掉 min-width:146px，改成两列等宽弹性，避免窄屏把行撑歪 */
+  .query-panel { gap: 10px 12px; }
+  .query-panel .field { min-width: 0; flex: 1 1 calc(50% - 6px); }
+
+  /* 记录检索：原先把 label 与输入框挤在同一行，窄屏下输入框被压扁、placeholder 被截断。
+     改成每个条件独占整行且 label 在上；两个按钮仍并排一行。 */
+  .record-filter-row { gap: 8px; align-items: stretch; }
+  .quick-label { flex: 1 1 100%; }
+  .record-filter-row .field-inline { flex: 1 1 100%; flex-direction: column; align-items: stretch; gap: 4px; }
+  .record-filter-row .field-inline input { width: 100%; }
+  .record-filter-row .btn { flex: 1 1 calc(50% - 4px); }
+
+  /* 榜单工具栏：搜索框整行、两个下拉平分一行、刷新按钮整行 */
+  .panel-tools { width: 100%; }
+  .panel-tools #inpFilter { flex: 1 1 100%; min-width: 0; }
+  /* 排序项的显示文案较长（「按稀有度（历史记录少→多）」），比筛选项多分一些宽度，
+     否则原生 select 会把显示值截断 */
+  .panel-tools #selFilter { flex: 1 1 0; min-width: 0; }
+  .panel-tools #selSort { flex: 1.7 1 0; min-width: 0; }
+  .panel-tools .btn { flex: 1 1 100%; }
+
+  /* 卡片瘦身：隐去学名 / 目科 / 本时段明细 / 稀有度条，只保留排名、中文名、
+     保护徽章与历史记录数（该地区历史全时段记录数，即榜单的排序依据）。
+     仍是两张一行，但卡片高度大约减半，整页长度随之大幅缩短。 */
+  .hot-card { padding: 8px 10px 9px; gap: 2px; }
+  .hc-latin, .hc-sub, .hc-hist, .hc-bar { display: none; }
+  .hc-foot { padding-top: 4px; }
+
+  /* 概览卡共 5 张：固定两列，并把末尾落单的那张铺满整行，避免留半格空位 */
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stat-grid > :nth-child(odd):last-child { grid-column: 1 / -1; }
+
+  /* 明细弹窗：两侧留白收紧；表格列多时允许内容区横向滚动，不至于撑破弹窗 */
+  .modal-mask { padding: 10px; }
+  .modal { max-height: 94vh; }
+  .modal-body { overflow-x: auto; }
+}
