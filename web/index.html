@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>观鸟地区稀有鸟种榜 · 中国观鸟记录中心数据</title>
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐦</text></svg>" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="brand">
+        <span class="brand-mark">🐦</span>
+        <div>
+          <h1>观鸟地区稀有鸟种榜</h1>
+          <p class="brand-sub">按省 / 市 / 区县，把本地记录最少的鸟种排在最前 · 附国家重点保护等级</p>
+        </div>
+      </div>
+      <div class="topbar-meta">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">正在连接服务…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- 查询条件 -->
+    <section class="panel query-panel">
+      <div class="field">
+        <label>省 / 自治区 / 直辖市</label>
+        <select id="selProvince">
+          <option value="">全国</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>市</label>
+        <select id="selCity">
+          <option value="">全部</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>区 / 县</label>
+        <select id="selDistrict">
+          <option value="">全部</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>起始日期</label>
+        <input type="date" id="inpStart" />
+      </div>
+      <div class="field">
+        <label>结束日期</label>
+        <input type="date" id="inpEnd" />
+      </div>
+
+      <!-- 记录检索：按观鸟点 / 记录人 / 鸟种收窄，三个条件都会同时作用于概览、榜单与报告明细；查询按钮也放在这一行 -->
+      <div class="quick-row record-filter-row">
+        <span class="quick-label">记录检索</span>
+        <div class="field field-inline">
+          <label for="inpPoint">观测地点</label>
+          <input type="text" id="inpPoint" list="dlPoint" placeholder="观鸟点关键字，如：奥森" autocomplete="off" />
+          <datalist id="dlPoint"></datalist>
+        </div>
+        <div class="field field-inline">
+          <label for="inpUser">用户名称</label>
+          <input type="text" id="inpUser" list="dlUser" placeholder="记录人，如：Zacco" autocomplete="off" />
+          <datalist id="dlUser"></datalist>
+        </div>
+        <div class="field field-inline">
+          <label for="inpTaxonName">鸟种名称</label>
+          <input type="text" id="inpTaxonName" list="dlTaxon" placeholder="中文名 / 学名，如：灰喜鹊" autocomplete="off" />
+          <datalist id="dlTaxon"></datalist>
+        </div>
+        <button class="btn btn-mini" id="btnResetFilters" title="清空观测地点 / 用户名称 / 鸟种名称">清空检索</button>
+        <button class="btn btn-primary" id="btnQuery">查询</button>
+      </div>
+      <div class="filter-hint" id="filterHint" hidden></div>
+    </section>
+
+    <!-- 概览 -->
+    <section id="overview" class="stat-grid"></section>
+
+    <!-- 保护等级概览 -->
+    <section class="panel protection-panel" id="protectionPanel" hidden>
+      <div class="panel-head">
+        <h2>保护等级构成</h2>
+        <span class="hint" id="protectionHint"></span>
+      </div>
+      <div class="prot-grid" id="protGrid"></div>
+    </section>
+
+    <div class="cols">
+      <!-- 本地稀有鸟种排行 -->
+      <section class="panel col-main">
+        <div class="panel-head">
+          <h2 id="hotTitle">本地稀有鸟种排行</h2>
+          <div class="panel-tools">
+            <span class="cache-chip" id="cacheChip" hidden></span>
+            <input type="search" id="inpFilter" placeholder="在本榜单内筛选鸟种名 / 学名" />
+            <select id="selFilter" class="mini-select">
+              <option value="all">全部鸟种</option>
+              <option value="protected">仅受保护（国一/国二/三有）</option>
+              <option value="national">仅国家重点保护（国一/国二）</option>
+              <option value="chinaEndemic">仅中国特有</option>
+              <option value="doubt">仅含疑问数据（上游标疑）</option>
+            </select>
+            <select id="selSort" class="mini-select">
+              <option value="record">按稀有度（历史记录少→多）</option>
+              <option value="protection">按保护等级</option>
+            </select>
+            <button class="btn btn-mini" id="btnRefresh" title="忽略本地缓存，重新向上游取一次数据">刷新数据</button>
+          </div>
+        </div>
+        <div id="hotList" class="hot-list"></div>
+        <div class="list-foot" id="listFoot"></div>
+      </section>
+
+      <!-- 侧栏图表：逐月鸟种数 / 逐月报告数 / 地区排行，按需开启（加 hidden 即可隐藏） -->
+      <aside class="col-side" id="sideCols" hidden>
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <h2>逐月鸟种数</h2><span class="hint">单位：种</span>
+          </div>
+          <div id="chartTaxon" class="chart"></div>
+        </section>
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <h2>逐月报告数</h2><span class="hint">单位：份</span>
+          </div>
+          <div id="chartReport" class="chart"></div>
+        </section>
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <h2 id="regionRankTitle">地区鸟种数排行</h2>
+          </div>
+          <div id="chartRegionRank" class="chart chart-tall"></div>
+        </section>
+      </aside>
+    </div>
+
+    <!-- 物种检索 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>按鸟种查看保护等级（郑四名录）</h2>
+      </div>
+      <div class="search-row">
+        <input type="search" id="inpTaxon"
+          placeholder="中文名 / 学名 / 拼音 / 首字母，如：丹顶鹤 / Grus japonensis / dandinghe / ddh" />
+        <button class="btn btn-primary" id="btnTaxon">检索</button>
+      </div>
+      <div id="taxonResult" class="taxon-result"></div>
+    </section>
+
+    <footer class="foot">
+      <p>
+        数据来源：<a href="https://www.birdreport.cn/" target="_blank" rel="noreferrer">中国观鸟记录中心</a>
+        （公民科学数据，存在观鸟强度与地区采样偏差，仅供参考）。
+        保护等级来自《国家重点保护野生动物名录》(2021)、《有重要生态、科学、社会价值的陆生野生动物名录》、IUCN 红色名录与中国生物多样性红色名录。
+      </p>
+      <p>
+      缓存策略：榜单（本时段鸟种清单）、「历史稀有度」（该地区不加时间范围的记录数）与「疑问数据」标记各存一份，都缓存 <strong>24 小时</strong>，一天失效一次；
+      概览与趋势等统计缓存 <strong>10 分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code id="cacheBackend">data/api-cache.json</code>，服务重启后自动读入内存继续复用。
+      同一地区只向上游取一次，切换筛选 / 排序 / 翻页直接复用缓存。需要最新数据时点「刷新数据」。
+      </p>
+      <p class="foot-note">
+        <strong>关于红色标记</strong>：榜单与明细里标红的鸟种，表示该时段在该地区有记录被上游
+        <strong>AI 半自动鸟种标疑</strong>（站点页面同样以红色中文名显示，即「疑问的数据」）。
+        每张卡片「本时段 N 条」后面会把它拆成 <code>正常 n 条 · 疑问 n 条</code>，徽章中的数字为被标疑的记录条数。
+        该标记来自上游 <code>record/activity/taxon</code> 的 <code>outside_type=1</code> 查询，
+        与不传该参数时的总数逐种核对完全吻合（正常 + 疑问 = 全部），仅作提示，不代表鸟种识别一定错误。
+      </p>
+      <p class="foot-note">本页仅做数据汇总展示，请遵守数据来源方的使用条款，合理控制请求频率。</p>
+    </footer>
+  </main>
+
+  <div id="loading" class="loading-mask" hidden>
+    <div class="spinner"></div>
+    <p id="loadingText">正在汇总数据…</p>
+  </div>
+
+  <!-- 概览卡下钻：鸟种 / 报告明细 -->
+  <div id="detailModal" class="modal-mask" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <div class="modal-head">
+        <h3 id="detailTitle">明细</h3>
+        <button class="modal-close" id="detailClose" aria-label="关闭" title="关闭（Esc）">×</button>
+      </div>
+      <div class="modal-sub" id="detailSub"></div>
+      <div class="detail-tools">
+        <input type="search" id="dSearch" placeholder="筛选…" />
+        <select id="dSort" class="mini-select">
+          <option value="record">按稀有度（历史记录少→多）</option>
+          <option value="protection">按保护等级排序</option>
+        </select>
+      </div>
+      <div class="modal-body" id="detailBody"></div>
+      <div class="modal-foot">
+        <span class="pager-info" id="dPageInfo"></span>
+        <div class="pager-btns">
+          <button class="btn btn-mini" id="dPrev">上一页</button>
+          <button class="btn btn-mini" id="dNext">下一页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+
+</html>

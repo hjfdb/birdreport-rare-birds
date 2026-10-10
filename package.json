@@ -1,0 +1,20 @@
+{
+  "name": "birdreport-region-hot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "基于中国观鸟记录中心（birdreport.cn）接口的「按地区汇总热门鸟种」服务端 + 网页端",
+  "main": "server/index.mjs",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "dev": "node --watch server/index.mjs",
+    "build:exe": "node build-exe.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
+  }
+}
