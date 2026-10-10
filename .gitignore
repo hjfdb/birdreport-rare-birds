@@ -1,10 +1,9 @@
 # 依赖
 node_modules/
 
-# 构建产物（node build-exe.mjs / node build-html.mjs 生成）
+# 构建产物（node build-exe.mjs 生成）
 build/
 dist/
-html/
 
 # 运行时缓存（会自动重建）
 data/

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "基于中国观鸟记录中心（birdreport.cn）接口的「按地区汇总热门鸟种」服务端 + 网页端",
+  "license": "MIT",
   "main": "server/index.mjs",
   "scripts": {
     "start": "node server/index.mjs",

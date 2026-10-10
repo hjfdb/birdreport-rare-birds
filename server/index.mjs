@@ -127,8 +127,8 @@ function sendJson(res, code, data) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    // 允许任意来源读取：这样 html/ 下的单文件版用 file:// 双击打开时，
-    // 也能直接读本机服务端的接口（浏览器会带上 Origin: null）。
+    // 允许任意来源读取：页面若用 file:// 双击打开（浏览器会带上 Origin: null），
+    // 也能直接读本机服务端的接口。
     'Access-Control-Allow-Origin': '*',
   });
   res.end(body);

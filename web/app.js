@@ -10,7 +10,7 @@
 const $ = (id) => document.getElementById(id);
 
 const API = (() => {
-  // 用 file:// 直接打开单文件版（html/index.html）时，这里会指向本机服务端。
+  // 用 file:// 双击打开页面时，这里会指向本机服务端。
   // 不能直连上游：记录中心的接口虽然有 CORS 头，但从 file:// 发出仍会被浏览器拦下，
   // 所以取数统一交给本机服务端完成（服务端已对 /api/* 放开 Access-Control-Allow-Origin）。
   const base = location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:8787';
@@ -25,7 +25,7 @@ const API = (() => {
   };
 })();
 
-/** 用 file:// 打开（单文件版）时为 true：页面本身不带服务端，取数走 http://127.0.0.1:8787 */
+/** 用 file:// 双击打开时为 true：页面本身不带服务端，取数走 http://127.0.0.1:8787 */
 const STANDALONE = !location.protocol.startsWith('http');
 
 /** 上一次筛选条件的本地存储键；与地址栏参数配合，实现「刷新后选择还在」 */
@@ -1305,7 +1305,7 @@ async function restoreRegion(init) {
   } catch (e) {
     setStatus('err', '无法连接服务端');
     $('hotList').innerHTML = STANDALONE
-      ? '<div class="notice error">单文件版需要本机服务端配合：请先在项目目录执行 <code>node server/index.mjs</code>，然后刷新本页。<br />（浏览器不能直接调记录中心的接口，取数必须经由本机服务端转发。）</div>'
+      ? '<div class="notice error">这个页面是用 file:// 直接打开的，需要本机服务端配合：请先在项目目录执行 <code>node server/index.mjs</code>，然后刷新本页。<br />（浏览器不能直接调记录中心的接口，取数必须经由本机服务端转发。）</div>'
       : '<div class="notice error">无法连接服务端，请先在项目目录执行 <code>node server/index.mjs</code> 后刷新页面。</div>';
     return;
   }
