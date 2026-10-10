@@ -20,6 +20,18 @@
 
 ## 快速开始
 
+### 方式一：直接下载 exe（不用装 Node）
+
+到 **[Releases](../../releases/latest)** 下载 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe`，双击运行 ——
+浏览器会自动打开 <http://127.0.0.1:8787/>，关掉那个黑色控制台窗口即停止服务。
+缓存落在 exe 同级的 `data/` 目录（该位置不可写时退到用户数据目录）。
+
+> **这个 exe 没有代码签名**：它由 Node 官方 SEA 机制注入生成，注入会让 node.exe 原有的
+> 签名失效，而签一份自己的证书需要额外成本。首次运行时 Windows SmartScreen 可能提示
+> 「未知发布者」，点「更多信息 → 仍要运行」即可。介意的话可以按方式三自己构建。
+
+### 方式二：从源码跑
+
 ```bash
 # 无需 npm install（零第三方依赖，仅用 Node 内置模块）
 node server/index.mjs
@@ -28,6 +40,19 @@ node server/index.mjs
 启动后打开：<http://127.0.0.1:8787/>
 
 可用环境变量：`PORT`（默认 8787）、`HOST`（默认 127.0.0.1）。
+
+### 方式三：自己构建 exe
+
+```bash
+npm install          # 装两个构建期依赖（esbuild、postject），它们不会进 exe
+npm run build:exe    # 产物在 dist/，可用 EXE_NAME 环境变量改文件名
+```
+
+构建走 Node 官方的 SEA：`server/` 打成单文件 CJS、`web/` 内嵌成资源、再复制一份 node.exe
+把 blob 注入进去 —— 所以**产物里跑的 Node 就是构建机上那一个**，换大版本等于换运行时。
+
+> 打 tag（`git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动构建并发布
+> 到 Releases，不用手动跑上面的命令。
 
 ## 功能
 
