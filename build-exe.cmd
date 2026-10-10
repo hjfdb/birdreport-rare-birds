@@ -1,6 +1,6 @@
 @echo off
 rem ---------------------------------------------------------------
-rem  Build "BirdReport Region Hot" into a single portable .exe.
+rem  Build "birdreport-rare-birds" into a single portable .exe.
 rem  Keep this file ASCII-only: cmd.exe reads batch files using the
 rem  OEM code page, and non-ASCII text here corrupts the parsing.
 rem

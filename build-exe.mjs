@@ -42,7 +42,7 @@ const CONFIG_FILE = path.join(BUILD, 'sea-config.json');
 const BLOB_FILE = path.join(BUILD, 'sea-prep.blob');
 const MANIFEST_FILE = path.join(BUILD, '_web-assets.json');
 
-const EXE_NAME = process.env.EXE_NAME || '观鸟地区热门榜.exe';
+const EXE_NAME = process.env.EXE_NAME || '观鸟地区稀有榜.exe';
 const EXE_FILE = path.join(DIST, EXE_NAME);
 
 /** postject 要认识 Node 在 node.exe 里预留的那串哨兵标记 */
@@ -240,7 +240,7 @@ async function main() {
   const stage = arg || 'all';
   if (stage !== 'all' && !STAGES[stage]) throw new Error(`未知步骤 "${stage}"。${usageHint()}`);
 
-  console.log('\n打包「观鸟地区热门榜」为单文件 exe\n');
+  console.log('\n打包「观鸟地区稀有榜」为单文件 exe\n');
 
   if (stage === 'all') {
     stageConfig();

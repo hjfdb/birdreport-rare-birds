@@ -154,7 +154,7 @@ export const getDistricts = (cityCode) => api('/front/system/adcode/district', {
 /** 鸟种名录检索（不传条件返回全部 3098 条物种） */
 export const searchTaxons = (params = {}) => api('/front/taxon/search', params);
 
-/** 区域鸟种清单 + 各鸟种记录数（热门度） */
+/** 区域鸟种清单 + 各鸟种记录数（上游叫「热门度」，本项目反向用作稀有度） */
 export const getRegionTaxons = (where, { limit = 2000, page = 1 } = {}) =>
   api('/front/record/activity/taxon', { ...where, page, limit });
 

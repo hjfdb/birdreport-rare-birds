@@ -1301,7 +1301,7 @@ async function boot() {
 boot()
   .then((port) => {
     const url = `http://${HOST}:${port}/`;
-    console.log(`\n  观鸟地区热门榜已启动${IS_SEA ? '（独立 exe 版）' : ''}`);
+    console.log(`\n  观鸟地区稀有榜已启动${IS_SEA ? '（独立 exe 版）' : ''}`);
     console.log(`  ▸ 网页端  ${url}`);
     console.log(`  ▸ 接口    ${url}api/health`);
     console.log(`  ▸ 网页文件 ${webSourceText()}`);
