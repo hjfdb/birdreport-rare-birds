@@ -83,23 +83,38 @@ jobs:
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }
 
+      - name: 打包 zip
+        # 86MB 的 exe 压成 zip 约 35MB，下载量少 60%。
+        # 用 PowerShell 自带的 Compress-Archive，不额外引工具。
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\$env:EXE_NAME"
+          $zip = [System.IO.Path]::ChangeExtension($exe, '.zip')
+          Compress-Archive -LiteralPath $exe -DestinationPath $zip -CompressionLevel Optimal -Force
+          $mb = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
+          Write-Host "已打包：$zip（$mb MB）"
+
       - name: 发布 Release
         if: github.ref_type == 'tag'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 传完整路径而不是 dist/*.exe：避免在 Windows 上让 shell 通配符
+          # 传完整路径而不是 dist/*.zip：避免在 Windows 上让 shell 通配符
           # 去展开一个含中文的文件名。
-          gh release create "$GITHUB_REF_NAME" "dist/${EXE_NAME}" \
-            --title "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --generate-notes
+          ZIP_NAME="${EXE_NAME%.exe}.zip"
+
+          # 带连字符的 tag（如 v0.0.1-beta）按 semver 惯例视为预发布版，
+          # GitHub 上会标成 Pre-release；v1.0.0 这种就是正式版。
+          ARGS=(--title "$GITHUB_REF_NAME" --verify-tag --generate-notes)
+          case "$GITHUB_REF_NAME" in *-*) ARGS+=(--prerelease);; esac
+
+          gh release create "$GITHUB_REF_NAME" "dist/${ZIP_NAME}" "${ARGS[@]}"
 
       - name: 上传构建产物（仅手动触发时）
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
           name: exe-dev
-          path: dist/*.exe
+          path: dist/*.zip
           retention-days: 7
