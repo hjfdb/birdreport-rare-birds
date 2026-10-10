@@ -1,0 +1,105 @@
+name: 发布 exe
+
+# 打 v* 的 tag 就自动构建并发布 Release：
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# 也能在 Actions 页面手动点「Run workflow」试跑：只构建 + 存 artifact，不碰 Release。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# 建 Release 需要写权限；除此之外不给任何多余权限
+permissions:
+  contents: write
+
+# 同一个 tag 不允许并发跑两次，避免两个 job 抢着建同一个 Release
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          # 必须钉死，不能只写 '24'：
+          # exe 是「复制这份 node.exe + 注入 SEA blob」做出来的（build-exe.mjs 第 4 步），
+          # 所以发布出去的 exe 里跑的 Node 就是这个版本。要与本机构建保持一致，
+          # 否则用户拿到的运行时和你测过的不是同一个。升本地 Node 时记得同步改这里。
+          node-version: '24.13.0'
+          cache: npm
+
+      - name: 安装构建依赖
+        run: npm ci
+
+      - name: 决定产物名
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="dev-${GITHUB_SHA:0:7}"
+          fi
+          echo "EXE_NAME=观鸟地区稀有榜-${VERSION}-win-x64.exe" >> "$GITHUB_ENV"
+          echo "  ▸ 产物名：观鸟地区稀有榜-${VERSION}-win-x64.exe"
+
+      - name: 构建 exe
+        run: node build-exe.mjs
+
+      - name: 冒烟验证（起 exe → 打 /api/health）
+        # 构建成功不等于 exe 能用。这一步真把 exe 跑起来打一次健康检查，
+        # 失败就让整个 job 失败 —— 坏包发不出去。
+        shell: pwsh
+        env:
+          OPEN_BROWSER: '0' # 否则 exe 会试着开浏览器（CI 里没有）
+          HOST: '127.0.0.1'
+          PORT: '8799'
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\$env:EXE_NAME"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "没找到产物：$exe" }
+          Write-Host "启动 $exe"
+
+          $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          try {
+            $resp = $null
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Seconds 1
+              if ($proc.HasExited) { throw "exe 提前退出了（退出码 $($proc.ExitCode)）" }
+              try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:$env:PORT/api/health" -TimeoutSec 3
+                if ($r.ok) { $resp = $r; break }
+              } catch { }
+            }
+            if ($null -eq $resp) { throw "40 秒内 /api/health 没有返回 ok" }
+            Write-Host "冒烟通过：service=$($resp.service) mode=$($resp.mode)"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+      - name: 发布 Release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 传完整路径而不是 dist/*.exe：避免在 Windows 上让 shell 通配符
+          # 去展开一个含中文的文件名。
+          gh release create "$GITHUB_REF_NAME" "dist/${EXE_NAME}" \
+            --title "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes
+
+      - name: 上传构建产物（仅手动触发时）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: exe-dev
+          path: dist/*.exe
+          retention-days: 7
