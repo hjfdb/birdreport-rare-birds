@@ -1,0 +1,164 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 签名密钥：keystore.properties 与 .jks 都在 .gitignore 里，不进版本库。
+//   storeFile=keystore/birdreport.jks
+//   storePassword=…
+//   keyAlias=birdreport
+//   keyPassword=…
+// 三级回退，保证任何环境下产出的都是**能直接安装**的包：
+//   ① 有 keystore.properties            → 用正式密钥（本地发布用）
+//   ② 有 BIRD_KEYSTORE_* 环境变量        → 用环境变量里的密钥（CI 从 Secrets 注入）
+//   ③ 都没有                            → 退回 debug 密钥
+// 第 ③ 条很关键：不这么做的话 CI 会打出 app-release-unsigned.apk，文件看着没问题，
+// 用户装上却会被系统直接拒绝（INSTALL_PARSE_FAILED_NO_CERTIFICATES），而日志里一点线索都没有。
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+def hasKeystoreProps = keystorePropsFile.exists()
+if (hasKeystoreProps) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+// ② 环境变量来源。CI 里把 .jks 用 base64 存进 Secrets，构建前解码成文件再指过来。
+def envKeystoreFile = System.getenv('BIRD_KEYSTORE_FILE')
+def hasEnvKeystore = envKeystoreFile && file(envKeystoreFile).exists()
+if (hasEnvKeystore) {
+    keystoreProps['storeFile'] = file(envKeystoreFile).absolutePath
+    keystoreProps['storePassword'] = System.getenv('BIRD_KEYSTORE_PASSWORD') ?: ''
+    keystoreProps['keyAlias'] = System.getenv('BIRD_KEY_ALIAS') ?: ''
+    keystoreProps['keyPassword'] = System.getenv('BIRD_KEY_PASSWORD') ?: ''
+}
+
+def hasRealKeystore = hasKeystoreProps || hasEnvKeystore
+if (!hasRealKeystore) {
+    // 这行会打到控制台上，所以**用纯 ASCII**：Windows 控制台按 GBK 解码，
+    // 中文提示会变成一串乱码（"δ�ҵ�…"），看着像出错了。
+    logger.lifecycle('[signing] No release keystore found. Signing the release APK with the debug key (installable, but test-only).')
+}
+
+// Node 侧代码（server/ 与 web/）放在仓库上一层，构建时复制成 APK 的 assets。
+// 不手工往 app/src/main/assets 里塞副本 —— 那样改了源码忘了同步，问题很难查。
+def generatedAssets = layout.buildDirectory.dir('generated/nodeAssets')
+
+// 版本号可以被命令行覆盖，让 APK 里的 versionName 跟发布 tag 对上：
+//   ./gradlew :app:copyApkToDist -PbirdVersionName=1.2.3 -PbirdVersionCode=42
+// CI 里从 tag 推导（见 .github/workflows/release.yml）。versionCode 用 run number，
+// 保证每次发布都比上一次大 —— 否则 Android 会拒绝覆盖安装。
+def appVersionName = project.findProperty('birdVersionName') ?: '1.0.0'
+def appVersionCode = (project.findProperty('birdVersionCode') ?: '1').toString().toInteger()
+
+android {
+    namespace 'com.birdreport.hot'
+    compileSdk 33
+    buildToolsVersion '33.0.2'
+    ndkVersion '25.1.8937393'
+
+    defaultConfig {
+        applicationId 'com.birdreport.hot'
+        minSdk 24
+        targetSdk 33
+        versionCode appVersionCode
+        versionName appVersionName
+
+        // 只出 arm64-v8a：现在在用的 Android 手机基本全是 64 位 ARM。
+        // libnode.so 单架就 60 MB 上下，多带一个 ABI 体积直接翻倍。
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                // c++_shared：libnode.so 自己就依赖 libc++_shared.so，
+                // 用同一套 STL 才能保证符号对得上，AGP 也会自动把它打进 APK。
+                arguments '-DANDROID_STL=c++_shared',
+                        // 运行时位置由这里显式传进去，不让 CMakeLists 自己数“往上几级目录”
+                        // —— 那种写法挪一下文件就断，而且报错信息很难看懂。
+                        "-DNODEJS_MOBILE_DIR=${rootDir.toString().replace('\\', '/')}/third_party/nodejs-mobile"
+                cppFlags '-std=c++17'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs += generatedAssets
+            // nodejs-mobile 的预编译产物，目录布局刚好就是 jniLibs 要求的样子：
+            //   third_party/nodejs-mobile/bin/<abi>/libnode.so
+            jniLibs.srcDirs += "$rootDir/third_party/nodejs-mobile/bin"
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (hasRealKeystore) {
+                storeFile hasEnvKeystore
+                        ? file(keystoreProps['storeFile'])
+                        : rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false // 没有第三方 Java 依赖，不需要混淆
+            // 有正式密钥就用正式的；否则退回 debug 密钥 —— 目标始终是「产出可安装的包」
+            signingConfig hasRealKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+// 把打好的 release APK 放进仓库根目录的 dist/ —— 和 exe 的产物放一起，发布时统一从 dist/ 取。
+// 产物名跟 Releases 里的其它平台对齐（ASCII、带版本与平台）：
+//   birdreport-rare-birds-v1.0.0-android-arm64.apk
+// 非 ASCII 的资产名在 Release 附件里会被剥掉，所以这里就用英文名。
+// 重命名放在这一步而不是 applicationVariants 里：AGP 8 的 output.name 不含 .apk 后缀，
+// 按名字判断很容易失配（第一版就这么踩了一次，产物还是 app-release.apk）。
+tasks.register('copyApkToDist', Copy) {
+    dependsOn 'assembleRelease'
+    from(layout.buildDirectory.dir('outputs/apk/release')) {
+        include '*.apk'
+    }
+    into "$rootDir/../dist"
+    rename { String name ->
+        name ==~ /app-.*\.apk/
+                ? "birdreport-rare-birds-v${android.defaultConfig.versionName}-android-arm64.apk"
+                : name
+    }
+}
+
+// 把 server/ 与 web/ 复制进生成目录，作为 APK 的 assets/nodejs-project/**。
+// App 首次启动时会把这一份解包到应用私有目录（Node 必须看到真实文件路径）。
+tasks.register('prepareNodeProject', Copy) {
+    from("$rootDir/../server") { into 'nodejs-project/server' }
+    from("$rootDir/../web") { into 'nodejs-project/web' }
+    into generatedAssets
+}
+
+// 让资源合并任务一定跑在复制之后（AGP 的任务名：mergeDebugAssets / mergeReleaseAssets）
+tasks.whenTaskAdded { t ->
+    if (t.name.startsWith('merge') && t.name.endsWith('Assets')) {
+        t.dependsOn 'prepareNodeProject'
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'prepareNodeProject' }

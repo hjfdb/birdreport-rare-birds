@@ -1,0 +1,8 @@
+// 顶层构建脚本：只声明 Android Gradle 插件的版本，具体配置在 app/build.gradle。
+//
+// 版本选择说明（跟着本机已装的东西走，避免再去下载新组件）：
+//   AGP 8.1.4  → 需要 Gradle 8.0+ / JDK 17；默认 NDK 25.1.8937393（本机已装）
+//   compileSdk 33 / buildTools 33.0.2（本机已装：platforms;android-33、build-tools;33.0.2）
+plugins {
+    id 'com.android.application' version '8.1.4' apply false
+}

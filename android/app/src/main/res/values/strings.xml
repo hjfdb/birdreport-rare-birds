@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 桌面图标下显示的名字。与 exe / 网页端保持同一个中文名。 -->
+    <string name="app_name">观鸟地区稀有榜</string>
+</resources>

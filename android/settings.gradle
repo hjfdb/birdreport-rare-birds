@@ -1,0 +1,22 @@
+// 只有一个模块：app。Node 运行时（libnode.so）通过 jniLibs + CMake 桥接进来。
+//
+// pluginManagement 必须显式声明仓库：Android Gradle 插件只发布在 Google 的 Maven 仓库，
+// 不声明的话 Gradle 只去默认的插件门户找，会报 “Plugin [id: 'com.android.application'] was not found”。
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "BirdReportHot"
+include ':app'

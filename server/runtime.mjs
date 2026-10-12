@@ -1,16 +1,18 @@
 /**
- * 运行形态适配层 —— 同一份源码，要同时支持两种跑法：
+ * 运行形态适配层 —— 同一份源码，要同时支持三种跑法：
  *
  *   1) 源码方式   node server/index.mjs          （开发 / 调试 / 改完立刻生效）
- *   2) 打包成 exe Node SEA（单文件可执行程序）    （双击就能用，不需要装 Node）
+ *   2) 打包成 exe Node SEA（单文件可执行程序）    （Windows 双击就能用，不需要装 Node）
+ *   3) 安卓 APK   nodejs-mobile（内嵌 Node 运行时）（手机上的壳把本文件所在的 server/ 解包到私有目录后启动）
  *
- * 两者的差别只有两处，其它逻辑完全共用：
+ * 三者的差别只有两处，其它逻辑完全共用：
  *
  *   ▸ 静态网页：源码方式从磁盘 web/ 读；
- *               exe 里没有磁盘 web/，构建时已把文件内嵌进 exe，用 sea.getAsset 取。
+ *               exe 里没有磁盘 web/，构建时已把文件内嵌进 exe，用 sea.getAsset 取；
+ *               Android 上是解包出来的真实目录，与源码方式一致。
  *   ▸ 数据目录：源码方式用项目下的 data/；
- *               exe 没有「项目目录」，放在 exe 同级的 data/，
- *               该处不可写（比如 exe 被放进 Program Files）时退到用户数据目录。
+ *               exe 没有「项目目录」，放在 exe 同级的 data/；
+ *               Android 没有「当前目录」（cwd 是 /），由壳用 BIRD_DATA_DIR 显式指定。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -137,19 +139,29 @@ function localAppData() {
 }
 
 /**
- * exe 形态下的数据目录候选（按优先级）：
- *   1. exe 同级的 data/  —— 绿色软件习惯，拷走 exe 就拷走了缓存
- *   2. 用户数据目录        —— exe 放在只读位置时兜底
- *   3. 系统临时目录        —— 最后的兜底，至少能跑起来
+ * 数据目录（缓存落盘位置）。
+ *
+ * 优先级：
+ *   1. BIRD_DATA_DIR —— 显式指定。Android 的壳靠这个告诉 Node 往哪写：
+ *      安卓进程没有「当前目录」的概念，cwd 是 /，不指定就只能猜。
+ *   2. exe  形态 → exe 同级的 data/（绿色软件习惯，拷走 exe 就拷走了缓存）
+ *      源码形态 → 项目下的 data/
+ *   3. 用户数据目录（exe 被放进只读位置时的兜底）
+ *   4. 系统临时目录（最后的兜底，至少能跑起来）
  */
 function pickDataDir() {
-  if (!IS_SEA) return path.resolve(process.cwd(), 'data');
+  const explicit = process.env.BIRD_DATA_DIR;
+  if (explicit) {
+    if (writable(explicit)) return path.resolve(explicit);
+    console.warn(`[runtime] BIRD_DATA_DIR=${explicit} 不可写，改用默认位置`);
+  }
 
-  const candidates = [
-    path.join(path.dirname(EXE_PATH), 'data'),
-    path.join(localAppData(), 'BirdReportHot', 'data'),
-    path.join(os.tmpdir(), 'BirdReportHot', 'data'),
-  ];
+  const candidates = IS_SEA
+    ? [path.join(path.dirname(EXE_PATH), 'data'), path.join(localAppData(), 'BirdReportHot', 'data')]
+    : [path.resolve(DEV_ROOT, 'data'), path.resolve(process.cwd(), 'data')];
+
+  candidates.push(path.join(os.tmpdir(), 'BirdReportHot', 'data'));
+
   for (const dir of candidates) {
     if (writable(dir)) return dir;
   }

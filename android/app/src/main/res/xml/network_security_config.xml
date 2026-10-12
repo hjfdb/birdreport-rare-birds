@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 9 起默认禁止明文 HTTP，而我们的界面就是本机 Node 服务端提供的
+  http://127.0.0.1:8787/ —— 只给回环地址开口子，其它域名仍然强制 HTTPS。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

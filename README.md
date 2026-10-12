@@ -24,11 +24,12 @@
 
 到 **[Releases](../../releases/latest)** 按自己的系统选一个：
 
-| 系统 | 下载 | 解压后运行 |
+| 系统 | 下载 | 怎么用 |
 | --- | --- | --- |
-| Windows | `birdreport-rare-birds-vX.Y.Z-win-x64.zip` | 双击 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe` |
-| macOS · Apple 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-arm64.zip` | 见下方命令 |
-| macOS · Intel 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-x64.zip` | 见下方命令 |
+| Windows | `birdreport-rare-birds-vX.Y.Z-win-x64.zip` | 解压后双击 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe` |
+| macOS · Apple 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-arm64.zip` | 解压，见下方命令 |
+| macOS · Intel 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-x64.zip` | 解压，见下方命令 |
+| Android（64 位手机） | `birdreport-rare-birds-vX.Y.Z-android-arm64.apk` | 直接装，见下方说明 |
 
 不确定自己是哪种 Mac：**  → 「关于本机」，芯片写「Apple M…」选 arm64，写「Intel」选 x64。
 
@@ -53,6 +54,27 @@ macOS 上按 <kbd>Ctrl</kbd>+<kbd>C</kbd> 即停止服务。缓存落在程序�
 >   命令行里也可一次性解除：`xattr -d com.apple.quarantine 文件名`
 >
 > 介意的话可以按方式三自己构建。
+
+**Android** —— 把 APK 传进手机点开安装即可（首次需允许「安装未知来源应用」）：
+
+```bash
+# 或者用数据线装（需要 adb 在 PATH 里）
+adb install -r birdreport-rare-birds-vX.Y.Z-android-arm64.apk
+```
+
+APK 里**内嵌了一整个 Node 运行时**（nodejs-mobile 的 `libnode.so`，内核 Node 18.20.4）和
+整套服务端 + 网页代码，装上就是自包含的，**不需要额外装任何东西**。首次启动会先把运行时解包到
+应用私有目录（大约 1~3 秒，界面上有进度圈），然后用 WebView 打开 `http://127.0.0.1:8787/`。
+
+几点要知道的：
+
+- **只支持 64 位 ARM 手机**（`arm64-v8a`），2020 年后的机器基本都是；APK 约 48 MB，其中 47 MB 是 Node 运行时。
+- **需要 Android 7.0（API 24）及以上**。Android 9 起默认禁止明文 HTTP，这里已用
+  `network_security_config.xml` **只对 `127.0.0.1` / `localhost`** 开了一个口子，其它域名仍然禁止。
+- **App 本身要联网** —— 数据实时取自 birdreport.cn，它只是把服务端搬进了手机。
+- **缓存**落在应用私有目录，卸载才清掉。
+- 看日志：`adb logcat -s BirdNode`（Node 的 stdout / stderr 都转到 logcat 了）。
+- 退出 App 会**直接结束进程** —— 不然下次打开时 8787 端口还被上一次占着。
 
 ### 方式二：从源码跑
 
@@ -79,6 +101,52 @@ node 二进制把 blob 注入进去 —— 所以**产物里跑的 Node 就是�
 > 打一个 tag 就会由 GitHub Actions 自动构建并发布到 Releases，不用手动跑上面的命令 ——
 > 详见下文「发布版本」。
 
+### 方式四：自己构建 Android APK
+
+```bash
+npm run build:apk          # 产物在 dist/birdreport-rare-birds-v<版本>-android-arm64.apk
+npm run build:apk -- --debug   # debug 版（构建快，但体积大、启动慢）
+```
+
+一条命令搞定：脚本会自己找 JDK 17（找不到会明确告诉你去装，而不是丢一堆编译错误）、
+缺 nodejs-mobile 运行时（约 130 MB）就自动下载、缺 `android/local.properties` 就按
+`ANDROID_SDK_ROOT` 补上。
+
+**前置条件**（一次性准备）：
+
+| 需要 | 版本 | 说明 |
+| --- | --- | --- |
+| JDK | **17+** | AGP 8.x 的硬要求。机器上 `JAVA_HOME` 指着 JDK 8 也没关系，脚本会另找 |
+| Android SDK | platforms **33**、build-tools **33.0.2** | 用 sdkmanager 装 |
+| NDK | **25.1.8937393** | 编译 `native-lib.cpp`（拉起 Node 的那几行 C++） |
+| CMake | **3.22.1** | 同上 |
+
+```bash
+sdkmanager "platforms;android-33" "build-tools;33.0.2" \
+           "ndk;25.1.8937393" "cmake;3.22.1"
+```
+
+想手动跑 Gradle 也可以（要自己保证 `JAVA_HOME` 是 JDK 17）：
+
+```bash
+cd android
+./gradlew :app:copyApkToDist      # 打 release 并把产物改名放进 ../dist
+```
+
+**关于签名**：`android/keystore.properties`（连同 `.jks`）都**不在版本库里**。
+没有这份文件时构建不会失败，而是**退回 debug 密钥签名** —— 产物照样能装，只是不能上架、
+且以后换成正式密钥时必须先卸载再装。要出正式包就在 `android/keystore.properties` 里写：
+
+```properties
+storeFile=keystore/birdreport.jks
+storePassword=…
+keyAlias=birdreport
+keyPassword=…
+```
+
+CI 上则改用 4 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
+`ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`），没配就自动走 debug 签名。
+
 ## 功能
 
 **网页端**
@@ -94,9 +162,13 @@ node 二进制把 blob 注入进去 —— 所以**产物里跑的 Node 就是�
   底部「稀有度」条同样按历史口径，带目科信息与保护等级徽章。**点卡片可看这种鸟出现在哪些公开报告**
   —— 点击时才向上游查询（不预取），弹层里按「发现点 / 发现人 / 时间」列出，点任一行跳到上游报告详情；
   查询条件自动沿用当前页面的地区与日期，并在打开的瞬间定格，之后改页面不影响它
+- **「疑问数据」红色标记**：榜单项与卡片上的鸟名**标红**，表示该时段本地区有记录被上游
+  半自动标疑（`outside_type=1`）。卡片上给出「疑问 N 条」，并且把本时段记录数拆成
+  **「正常 N 条 · 疑问 M 条」**（两者相加恒等于本时段总数，逐一核对过），
+  榜单脚注汇总「标红的 X 种含疑问数据，共 Y 条」。
+  上游这个标记取不到时不会让整页失败，只是在脚注提示「疑问数据标记暂时取不到」
 - 筛选：全部 / 仅受保护 / 仅国家重点保护 / 仅中国特有，以及按鸟种名、学名搜索
 - 图表：逐月鸟种数、逐月报告数、省内下一级（地市或区县）鸟种数排行（三块默认隐藏，见下）
-- 榜单 CSV 导出（含保护等级列，UTF-8 BOM，Excel 可直接打开）
 - 支持 URL 直达：`?province=浙江省&city=杭州市&district=西湖区&start=2026-01-01&end=2026-10-10`
   （`all=1` 表示全部时间）
 
@@ -208,8 +280,13 @@ URL 规则是 `/home/record/page.html?param=<Base64(JSON({reportId,ts}))>&sign=<
 │   ├── birdreport.mjs   # 上游接口客户端（RSA 请求加密 + MD5 签名 + AES 响应解密）
 │   ├── cache.mjs        # 统一缓存：磁盘持久化 + 启动读入内存 + TTL 过期
 │   ├── protection.mjs   # 保护等级字典（复用同一缓存，永不过期）
+│   ├── runtime.mjs      # 运行形态适配层：源码 / exe(SEA) / APK 三种形态下「去哪读文件、缓存写哪」
 │   └── index.mjs        # HTTP 服务、路由与静态托管
 ├── web/                 # 纯原生 HTML / CSS / JS 前端（零依赖，图表为内联 SVG）
+├── android/             # 打 APK：内嵌 nodejs-mobile 运行时（见「方式四」）
+│   ├── build-apk.mjs            # 一键构建：探 JDK 17 → 补 sdk.dir → 拉运行时 → 跑 Gradle
+│   ├── fetch-nodejs-mobile.mjs  # 拉 libnode.so 与头文件（约 130 MB，不进 git）
+│   └── app/src/main/            # cpp/native-lib.cpp（拉起 Node）+ java/…（WebView 与首次解包）
 ├── .github/workflows/   # release.yml：打 tag 自动构建并发布 Release（见下文「发布版本」）
 ├── build-exe.mjs        # 打包单文件 exe（Node SEA）；build-exe.cmd 是同一流程的命令行版
 └── data/                # 本地缓存文件（api-cache.json / protection.json，可随时删除，会自动重建）
@@ -217,24 +294,26 @@ URL 规则是 `/home/record/page.html?param=<Base64(JSON({reportId,ts}))>&sign=<
 
 ## 发布版本（打 tag 自动发布）
 
-推一个 tag 就会自动构建 exe 并发布到 Releases，不需要手动跑任何构建命令：
+推一个 tag 就会自动构建 4 个产物并发布到 Releases，不需要手动跑任何构建命令：
 
 ```bash
 git tag -a v0.0.3 -m "v0.0.3"     # -a 是附注标签，带作者 / 日期 / 说明
 git push origin v0.0.3            # ← 必须单独推 tag，git push 不会顺带推它
 ```
 
-约 2–3 分钟后自动完成。三个平台**并行**构建（`windows-latest` / `macos-latest` arm64 /
+约 3–5 分钟后自动完成。桌面三个平台**并行**构建（`windows-latest` / `macos-latest` arm64 /
 `macos-15-intel` x64），每个平台都会：构建 → **冒烟验证**（解压发布包、真起一次那个二进制打
-`/api/health`，不通就让整个 job 失败，坏包发不出去）→ 压成 zip。最后再由一个单独的 job
-把三个 zip 一次挂到 Release 上。
+`/api/health`，不通就让整个 job 失败，坏包发不出去）→ 压成 zip。Android 是另一个 job，
+在自己的 runner 上装 SDK / NDK、拉 nodejs-mobile、构建 APK，并验证**签名、清单、assets 是否齐全**。
+最后再由一个单独的 job 把 4 个附件一次挂到 Release 上。
 
-产物名取自 tag，每个平台一个附件：
+产物名取自 tag：
 
 ```
 birdreport-rare-birds-<tag>-win-x64.zip
 birdreport-rare-birds-<tag>-mac-arm64.zip
 birdreport-rare-birds-<tag>-mac-x64.zip
+birdreport-rare-birds-<tag>-android-arm64.apk
 ```
 
 **tag 怎么写决定发布形态**：
@@ -325,8 +404,49 @@ artifact（不建 Release），用于试跑整条流程。
 - **明确的业务错误码不重试**：上游返回 `code 500 / 505 / 405` 时 `api()` 会立即抛错（`noRetry`）。
   重试不能让它变好，而 `code 500` 本身要 20 秒才吐出来，重试 3 次会把一次失败拖成一分钟。
 
+### Android 打包（为什么这么做）
+
+桌面版那套「Node SEA 注入」在 Android 上走不通：Android 是个 Java/Kotlin 的世界，双击一个
+可执行文件也不会发生什么。所以 Android 版是**把 Node 当成一个可链接的库**来用 ——
+这正是 [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) 提供的东西：
+
+```
+APK
+├── lib/arm64-v8a/libnode.so      47 MB   ← nodejs-mobile 预编译的 Node 18.20.4（导出 node::Start）
+├── lib/arm64-v8a/libbirdnode.so  0.1 MB  ← 我们自己的 JNI 壳：native-lib.cpp
+├── lib/arm64-v8a/libc++_shared.so        ← libnode.so 依赖它，必须一起带上
+└── assets/nodejs-project/               ← server/ 与 web/ 的原样副本
+```
+
+启动链条：
+
+1. `MainActivity` 起一个子线程（Node 的事件循环不会返回，**绝不能**占着主线程）；
+2. 子线程调 JNI（`NodeRunner.startNode`）→ `native-lib.cpp` 里设置好 `argv`、`BIRD_DATA_DIR`、
+   `TMPDIR`、`HOST=127.0.0.1`，把 Node 的 stdout / stderr 用 `pipe` + `dup2` 接到 logcat
+   （所以 `adb logcat -s BirdNode` 能看到它的一切输出），然后调用 `node::Start()`；
+3. 首次启动时 `AssetInstaller` 已经把 `assets/nodejs-project/**` 解包到应用私有目录
+   （assets 里的东西没有文件路径，而 Node 必须看到真实文件），并留一个 `.assets-version`
+   标记 —— 只有版本变了才重解包。**数据目录 `files/data` 故意放在解包目录之外**，
+   这样重解包不会把缓存一起清掉；
+4. 主线程轮询 `/api/health`，通了才让 WebView 加载 `http://127.0.0.1:8787/`，
+   加载完撤掉遮罩。
+
+几个被 Android 逼出来的改动：
+
+- **`BIRD_DATA_DIR` 环境变量**（见 `server/runtime.mjs`）：Android 进程的当前目录是 `/`，
+  既不可写也谈不上「程序同级目录」，所以缓存位置必须显式告知。
+- **明文 HTTP 只对回环地址开口**：Android 9（API 28）起默认禁止明文 HTTP，
+  用 `res/xml/network_security_config.xml` 只给 `127.0.0.1` / `localhost` 开了例外，
+  而不是图省事写 `usesCleartextTraffic="true"` 把整个 App 的 HTTP 限制（真机上那样等于对所有域名放开）。
+- **退出直接杀进程**：Node 的事件循环没有「优雅退出」的口子，`onDestroy` 里
+  `Process.killProcess(myPid())` —— 不这么做，下次打开时 8787 还占着，页面会白屏。
+- **只出 arm64-v8a**：`libnode.so` 单个 ABI 就 47 MB，多带一个体积直接翻倍；
+  而 2020 年之后的 Android 手机基本都是 64 位 ARM。
+
 ### 已知限制
 
+- **Android 版只支持 64 位 ARM 手机**（`arm64-v8a`），且需要 Android 7.0（API 24）以上；
+  模拟器与 Intel 版手机装不上（想支持就得改 `abiFilters` 并接受体积翻倍）。
 - **上游不支持全国范围的鸟种聚合查询**（返回 500）。选中「全国」时，页面会提示并改用「全国各省鸟种数排行」呈现，概览与榜单需选择具体行政区。
 - **上游也不支持「大范围 + 全时段」**：实测北京市不带任何时间约 20 秒后返回 `code 500`，「近 5 年」同样失败；
   「当天 / 近 30 天 / 近 1 年 / 近 3 年」都正常。所以起止日期默认「当天」，把两个日期都清空时页面会给出警告。

@@ -15,3 +15,23 @@ data/
 *.log
 shots/
 .DS_Store
+# 排查用的临时夹具（探针脚本、日志、下载物…）。只匹配仓库根目录，别误伤子目录里的正常文件
+/tmp-*
+
+# ---- Android ----
+# Gradle 构建产物
+android/.gradle/
+android/build/
+android/app/build/
+# CMake 的构建缓存（编译 native-lib.cpp 时生成，几百 KB 到几 MB，且与机器相关）
+android/app/.cxx/
+# 机器相关：本机 Android SDK 位置
+android/local.properties
+# 签名密钥（自己生成，绝不提交）
+android/keystore.properties
+android/keystore/
+android/*.keystore
+android/*.jks
+android/**/*.jks
+# nodejs-mobile 预编译运行时：解包后约 190 MB，用 android/fetch-nodejs-mobile.mjs 按需拉取
+android/third_party/

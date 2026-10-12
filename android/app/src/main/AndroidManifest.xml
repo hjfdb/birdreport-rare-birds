@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 服务端要在手机上直接访问 api.birdreport.cn，需要联网 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!--
+          明文 HTTP 的口子**只通过 networkSecurityConfig 开**（只放 127.0.0.1 / localhost）。
+          这里刻意**不写** android:usesCleartextTraffic="true"：那个开关是「一刀切放开」，
+          写上会让整个 App 对所有域名都能走明文，也让人看不出下面那份配置到底起没起作用。
+          minSdk 是 24，networkSecurityConfig 一定生效（API 24+ 它优先于 usesCleartextTraffic）。
+        -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,13 +1,13 @@
 name: 发布
 
-# 打 v* 的 tag 就自动为三个平台构建并发布 Release：
+# 打 v* 的 tag 就自动为三个桌面平台构建、并额外产出 Android APK，一起发布 Release：
 #   git tag v1.0.0 && git push origin v1.0.0
 #
 # 也能在 Actions 页面手动点「Run workflow」试跑：只构建、把产物存成 artifact，不建 Release。
 #
-# 为什么是两个 job：三个平台要并行构建，但**发布只能由一个 job 干** —— 三个 job 同时
+# 为什么是两个 job 层：各平台要并行构建，但**发布只能由一个 job 干** —— 多个 job 同时
 # 调 gh release create 会互相抢（幂等判断能兜住「已存在」，兜不住「两个同时看到不存在」）。
-# 所以 build 并行出产物，release 等它们全好了再一次性把三个 zip 挂上去。
+# 所以 build（桌面三平台矩阵）与 android 各自出产物，release 等它们全好了再一次性挂上去。
 
 on:
   push:
@@ -159,14 +159,152 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  android:
+    # 桌面三个平台的产物是「复制 Node 再注入 SEA blob」，Android 这条完全走的是另一套路：
+    # 内嵌 nodejs-mobile 的 libnode.so（Node 18.20.4），Node 侧源码（server/ + web/）当 assets
+    # 打进 APK，首次启动解包到私有目录再跑。所以它是独立 job，只是产物汇入同一个 Release。
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          # 只用来跑 android/fetch-nodejs-mobile.mjs 和给 Gradle 传版本号，不跑 npm ci
+          node-version: '24.13.0'
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          # AGP 8 必须要 JDK 17；顺便让 Gradle 依赖缓存也走这套
+          cache: gradle
+
+      - name: 安装 Android SDK 组件
+        # runner 自带的 SDK 里 build-tools / NDK 版本是浮动的，可能没有我们要的那一版，
+        # 而 AGP 找不到指定版本会直接失败。这里**显式钉死**三件套：
+        #   platforms;android-33      → compileSdk 33
+        #   build-tools;33.0.2        → buildToolsVersion
+        #   ndk;25.1.8937393          → ndkVersion（编译 native-lib.cpp）
+        #   cmake;3.22.1              → externalNativeBuild 指定的版本
+        run: |
+          # ANDROID_SDK_ROOT / ANDROID_HOME 是 runner 进程的环境变量，不是 workflow 的 env，
+          # 所以只能从 shell 里读（写成 ${{ env.ANDROID_SDK_ROOT }} 会解析成空串）。
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          if [ -z "$SDK" ]; then echo "找不到 Android SDK"; exit 1; fi
+          echo "SDK=$SDK"
+          # 写一份 local.properties：它本身是 gitignore 的，CI 里必须现场生成
+          echo "sdk.dir=$SDK" > android/local.properties
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393" "cmake;3.22.1"
+
+      - name: 拉取 nodejs-mobile 运行时
+        # 约 130 MB 的官方包，解出 bin/<abi>/libnode.so 与 include/node/。
+        # 不进 git（解包后近 190 MB），所以每次构建都现场拉。
+        # build-apk.mjs 里也有一份「缺了就自动拉」的兜底，这里单独列一步是为了
+        # 让下载失败在日志里明确显示为「拉取」这一步失败，而不是混在 Gradle 输出里。
+        run: node android/fetch-nodejs-mobile.mjs
+
+      - name: 准备签名密钥
+        # 没配 Secrets 也能构建成功：app/build.gradle 会退回 debug 密钥，
+        # 产物依然可以安装（只是不能上架、且换签名后需要卸载重装）。
+        # 配了 Secrets 就用正式密钥，签名信息不会落盘到工作区（放在 RUNNER_TEMP）。
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::notice::未配置 ANDROID_KEYSTORE_BASE64，release APK 将用 debug 密钥签名，仅供测试分发"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "BIRD_KEYSTORE_FILE=$RUNNER_TEMP/release.jks"
+            echo "BIRD_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "BIRD_KEY_ALIAS=$KEY_ALIAS"
+            echo "BIRD_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "已启用正式签名密钥"
+
+      - name: 决定版本号
+        id: ver
+        shell: bash
+        run: |
+          # APK 里的 versionName 要跟 tag 对上，否则 Releases 里的文件名（v1.0.0）和
+          # 应用「关于」里显示的版本（1.0.0）会对不起来。
+          # 手动试跑时没有 tag，就沿用 gradle 里的默认值。
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=1.0.0" >> "$GITHUB_OUTPUT"
+          fi
+          echo "  ▸ versionName=${{ steps.ver.outputs.name }}"
+
+      - name: 构建 APK
+        # 刻意走 node android/build-apk.mjs 而不是直接 ./gradlew —— 让 CI 跑的就是
+        # 用户本地跑的那条路径（JDK 探测、缺 sdk.dir 就补、产物改名），
+        # 免得「本地能出包、CI 出不来」这种最难查的问题。
+        # 脚本内部用 java 跑 gradle-wrapper.jar，不依赖 gradlew 的可执行位。
+        env:
+          BIRD_VERSION_NAME: ${{ steps.ver.outputs.name }}
+          # versionCode 用 run number：必须单调递增，否则 Android 会拒绝覆盖安装
+          BIRD_VERSION_CODE: ${{ github.run_number }}
+        run: node android/build-apk.mjs
+
+      - name: 冒烟验证（签名 + 清单 + assets）
+        # 构建成功不等于包能用。这里验三件最容易静默出错的事：
+        #   ① 签名          —— 未签名的包用户装上会被系统拒绝，而日志里毫无线索
+        #   ② 清单与应用名  —— application-label 乱码 / 图标丢失都只在这里看得出来
+        #   ③ Node 侧文件   —— assets/nodejs-project/ 少一个文件，App 启动就是白屏
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          APK=$(ls dist/*.apk)
+          echo "产物：$APK（$(du -h "$APK" | cut -f1)）"
+
+          echo "--- 签名 ---"
+          "$SDK/build-tools/33.0.2/apksigner" verify --print-certs "$APK" | head -5
+
+          echo "--- 清单 ---"
+          BADGING=$("$SDK/build-tools/33.0.2/aapt2" dump badging "$APK" | grep -E '^(package|sdkVersion|targetSdkVersion|application-label|application-icon-160|launchable-activity)')
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "package: name='com.birdreport.hot'" || { echo "包名不对"; exit 1; }
+
+          echo "--- assets ---"
+          # 期望清单**直接从源码树算出来**，不硬编码文件名 ——
+          # 以后往 server/ 或 web/ 里加文件，这里自动跟上，不会悄悄漏掉。
+          # （Gradle 的 prepareNodeProject 是整目录拷贝，所以两边必然一一对应。）
+          LIST=$(unzip -l "$APK" | awk '/assets\/nodejs-project/ {print $4}')
+          echo "$LIST"
+          MISSING=0
+          while IFS= read -r f; do
+            echo "$LIST" | grep -qx "assets/nodejs-project/$f" || { echo "assets 里缺 $f"; MISSING=1; }
+          done < <(find server web -type f)
+          [ "$MISSING" = 0 ] || exit 1
+          echo "assets 文件数：$(echo "$LIST" | wc -l)"
+          echo "冒烟通过"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-arm64
+          path: dist/*.apk
+          # APK 本身已压缩（libnode.so 压缩率很高），不再压一遍省时间
+          compression-level: 0
+          retention-days: 7
+
   release:
-    needs: build
+    needs: [build, android]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: 取回三个平台的产物
+      - name: 取回各平台的产物
         uses: actions/download-artifact@v8
         with:
           path: assets
@@ -191,10 +329,10 @@ jobs:
           # Release 或草稿、之后才推 tag），它只会报「已存在」然后整个 job 失败，产物根本传不
           # 上去 —— 线上就留下一个没有附件的空 Release。所以先探一下：
           #   已存在 → 只上传并覆盖附件，不动你已经写好的说明与预发布标记
-          #   不存在 → 照旧新建（三个附件一次挂上）
+          #   不存在 → 照旧新建（桌面三个 zip + 安卓 apk 一次挂上）
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME 已存在，改为上传并覆盖附件（保留其说明与标记）"
-            gh release upload "$GITHUB_REF_NAME" assets/*.zip --clobber
+            gh release upload "$GITHUB_REF_NAME" assets/*.zip assets/*.apk --clobber
           else
-            gh release create "$GITHUB_REF_NAME" assets/*.zip "${ARGS[@]}"
+            gh release create "$GITHUB_REF_NAME" assets/*.zip assets/*.apk "${ARGS[@]}"
           fi

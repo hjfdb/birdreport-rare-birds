@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node server/index.mjs",
     "dev": "node --watch server/index.mjs",
-    "build:exe": "node build-exe.mjs"
+    "build:exe": "node build-exe.mjs",
+    "build:apk": "node android/build-apk.mjs"
   },
   "engines": {
     "node": ">=18"
