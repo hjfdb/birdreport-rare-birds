@@ -52,8 +52,8 @@ npm run build:exe    # 产物在 dist/，可用 EXE_NAME 环境变量改文件�
 构建走 Node 官方的 SEA：`server/` 打成单文件 CJS、`web/` 内嵌成资源、再复制一份 node.exe
 把 blob 注入进去 —— 所以**产物里跑的 Node 就是构建机上那一个**，换大版本等于换运行时。
 
-> 打 tag（`git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动构建并发布
-> 到 Releases，不用手动跑上面的命令。
+> 打一个 tag 就会由 GitHub Actions 自动构建并发布到 Releases，不用手动跑上面的命令 ——
+> 详见下文「发布版本」。
 
 ## 功能
 
@@ -184,8 +184,45 @@ URL 规则是 `/home/record/page.html?param=<Base64(JSON({reportId,ts}))>&sign=<
 │   ├── protection.mjs   # 保护等级字典（复用同一缓存，永不过期）
 │   └── index.mjs        # HTTP 服务、路由与静态托管
 ├── web/                 # 纯原生 HTML / CSS / JS 前端（零依赖，图表为内联 SVG）
+├── .github/workflows/   # release.yml：打 tag 自动构建并发布 Release（见下文「发布版本」）
+├── build-exe.mjs        # 打包单文件 exe（Node SEA）；build-exe.cmd 是同一流程的命令行版
 └── data/                # 本地缓存文件（api-cache.json / protection.json，可随时删除，会自动重建）
 ```
+
+## 发布版本（打 tag 自动发布）
+
+推一个 tag 就会自动构建 exe 并发布到 Releases，不需要手动跑任何构建命令：
+
+```bash
+git tag -a v0.0.3 -m "v0.0.3"     # -a 是附注标签，带作者 / 日期 / 说明
+git push origin v0.0.3            # ← 必须单独推 tag，git push 不会顺带推它
+```
+
+约 1–2 分钟后自动完成：构建 exe → **冒烟验证**（真起一次 exe 打 `/api/health`，不通就让整个
+job 失败，坏包发不出去）→ 压成 zip → 建 Release 挂上附件。产物名取自 tag：
+`birdreport-rare-birds-<tag>-win-x64.zip`。
+
+**tag 怎么写决定发布形态**：
+
+| 写法 | 结果 |
+| --- | --- |
+| `v1.0.0`、`v0.0.3` | 正式 Release |
+| `v0.0.3-beta`、`v1.0.0-rc1` | **Pre-release**（tag 里带 `-` 即自动标记为预发布） |
+
+**几个注意点**
+
+- **`git push` 不会推 tag**，必须 `git push origin <tag>`，否则工作流根本不触发。
+- **别用 `git push --tags`**：它会把本地所有 tag 一次全推上去，包括你不打算发布的那些。
+- **重复推同一个 tag 是安全的**：Release 已存在时，工作流只覆盖附件，既不会失败，也不会动你
+  在网页上写好的发布说明与预发布标记。所以「先在网页建好 Release、写好说明，再打 tag 让 CI
+  挂产物」这条流程也能走。
+- **要重来**：`git tag -d v0.0.3` 删本地、`git push origin --delete v0.0.3` 删远端（会连带删掉
+  对应的 Release）。若只是附件不对，**不必删 tag**，重推一次同一个 tag 即可。
+- `package.json` 的 `version` 与发布**无关**（产物版本取自 tag）。想保持仓库里版本号一致，
+  可以顺手 `npm version <版本> --no-git-tag-version`，再把 package.json 一起提交。
+
+另有 `workflow_dispatch` 手动入口：在 Actions 页面点「Run workflow」只构建、把产物存成
+artifact（不建 Release），用于试跑整条流程。
 
 ## 缓存策略
 
