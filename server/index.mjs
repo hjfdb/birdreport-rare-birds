@@ -385,12 +385,14 @@ const historyLoader = (region, startTime, endTime) => async () => {
 };
 
 /**
- * 取历史稀有度。上游失败（风控 / 宽窗口 500）时**不会把失败写进主缓存**，
- * 而是补一次重试；仍失败就留一个**短命的失败标记** —— 接下来这一小段时间里
- * 所有请求直接降级、不再重复打这条慢查询（否则「一次失败 → 每次浏览都重试」，
- * 既慢又白喂上游）。点「刷新数据」（nocache）会绕过标记立即重试。
+ * 取历史稀有度。
+ *
+ * ⚠ 这份缓存是**强制的**：`nocache` 等外部参数一律打不进来 —— 口径固定、变化慢，
+ * 只按一个月的有效期自然过期（跨年自动换键）。唯一会提前回源的是它自己失败后的
+ * 重试；仍失败就留一个**短命的失败标记**（这一小段时间里所有请求直接降级、
+ * 不再重复打这条慢查询），标记到期后自动再试。
  */
-async function loadHistory(where, nocache = false) {
+async function loadHistory(where) {
   const region = regionOnlyWhere(where);
   if (!region.province) return { byId: {}, byLatin: {}, speciesCount: 0, meta: null, error: '缺少区域条件' };
   // 窗口 = 去年 1 月 1 日 ~ 今天（"最近两年"）。起点进缓存键、跨年自动换键；
@@ -399,21 +401,26 @@ async function loadHistory(where, nocache = false) {
   const endTime = todayYmd();
   const key = whereKey(region, `history:${startTime}`);
   const loader = historyLoader(region, startTime, endTime);
+  // 强制走缓存（force 恒为 false）：命中就用、过期才回源；nocache 不参与
+  const read = () => cached(key, loader, false, { ttl: HISTORY_TTL_MS });
+  // 缓存条目 → 返回值。「失败标记」不能当有效数据，要如常降级
+  const fromEntry = ({ value, meta }) =>
+    value.failed
+      ? { byId: {}, byLatin: {}, speciesCount: 0, meta, error: value.failed }
+      : { ...value, meta, error: '' };
   try {
-    const { value, meta } = await cached(key, loader, nocache, { ttl: HISTORY_TTL_MS });
-    // 命中「失败标记」：不久前刚失败过，这一小段时间内不再回源
-    if (value.failed) {
+    const r = await read();
+    if (r.value.failed) {
       console.warn(`[api] 历史稀有度命中失败标记（${Math.round(DEGRADED_TTL_MS / 60000)} 分钟内不再回源）：${JSON.stringify({ ...region, startTime, endTime })}`);
-      return { byId: {}, byLatin: {}, speciesCount: 0, meta, error: value.failed };
     }
-    return { ...value, meta, error: '' };
+    return fromEntry(r);
   } catch (e) {
     // 上游对宽窗口偶发 500（实测很常见），补一次重试 —— api() 对 500 是立即失败，
     // 重试只能在这一层做。多数情况下第二次就过；过了就能按一个月缓存住。
+    // 重试不强删缓存：并发时若另一个请求刚好把结果写进去，这里直接命中它的结果。
     console.warn(`[api] 历史稀有度本次回源失败（请求参数见上方日志），补一次重试：` + e.message);
     try {
-      const { value, meta } = await cached(key, loader, true, { ttl: HISTORY_TTL_MS });
-      return { ...value, meta, error: '' };
+      return fromEntry(await read());
     } catch (e2) {
       cache.set(key, { byId: {}, byLatin: {}, speciesCount: 0, rowCount: 0, total: 0, failed: e2.message }, { ttl: DEGRADED_TTL_MS });
       console.warn('[api] 历史稀有度取不到（重试后仍失败），本次退回按本时段记录数排序：' + e2.message);
@@ -625,9 +632,11 @@ async function applyLifer(list, liferUser, nocache) {
  *            doubtSpeciesCount: number, doubtRecordSum: number, doubtMatched: number, doubtError: string}}
  */
 async function rankByHistory(list, where, nocache) {
-  // 串行而非并行：两者都是 24 小时才回源一次的慢查询，
-  // 串行多花一两秒，但同一地区同时只向上游发一个请求，不容易踩到频次风控。
-  const h = await loadHistory(where, nocache);
+  // 串行而非并行：两者都是慢查询，串行多花一两秒，
+  // 但同一地区同时只向上游发一个请求，不容易踩到频次风控。
+  // 注意：历史（loadHistory）**不吃 nocache** —— 一个月缓存是强制的；
+  // 疑问标记照常跟着 nocache 刷新（它跟着榜单本时段走，变化快）。
+  const h = await loadHistory(where);
   const doubt = await loadDoubt(where, nocache);
   let matched = 0;
   let doubtMatched = 0;
