@@ -32,11 +32,11 @@ const STANDALONE = !location.protocol.startsWith('http');
 const STORAGE_KEY = 'birdreport.ui.v1';
 
 /**
- * 「我的」默认绑定的记录中心用户名。
- * 首次打开（地址栏与本地存储里都没有）就用它预填，直接点「绑定」即可。
+ * 「我的」默认绑定的记录中心用户名：**默认不绑定（空）**。
+ * 首次打开时输入框留空，由用户自己填；地址栏 / 本地存储里的绑定状态优先。
  * 用户取消绑定后会记住「已解绑」这个状态，不会又被默认值拉回去。
  */
-const DEFAULT_LIFER_USER = 'kkia';
+const DEFAULT_LIFER_USER = '';
 
 /** 侧栏三块图表（逐月鸟种数 / 逐月报告数 / 地区排行）是否启用，对应 index.html 里 #sideCols 的 hidden */
 const sideChartsVisible = () => !$('sideCols').hidden;
@@ -293,7 +293,7 @@ function resolveInitial() {
   const start = allTime ? '' : pick('start') || dft.start;
   const end = allTime ? '' : pick('end') || dft.end;
 
-  // 绑定用户：URL > 本地存储 > 默认（kkia）。
+  // 绑定用户：URL > 本地存储 > 默认（空 = 不绑定）。
   // 这里**不能用 pick()** —— 它把空串当成「没设置」，而「空串」正是「已解绑」的有效值。
   // 少了这一层区分，用户取消绑定后刷新又会被默认值拉回 kkia，等于解绑不了。
   const savedHasLifer = typeof saved.lifer === 'string';
@@ -828,20 +828,20 @@ function renderHot(data) {
   }
   $('hotList').innerHTML = list
     .map((x) => {
-      // 前三名就是本地最稀有的三笔记录（按历史全时段记录数）
+      // 前三名就是本地最稀有的三笔记录（按最近两年记录数）
       const rankCls = x.rank <= 3 ? ` top${x.rank}` : '';
       const badges =
         levelBadge(x) +
         (x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : '') +
         iucnBadge(x.iucn);
       const rar = Math.round((x.rarity ?? 0) * 100);
-      // 排序依据是「历史（该地区全时段）记录数」，所以卡片上的大数字也用它；
+      // 排序依据是「该地区最近两年记录数」，所以卡片上的大数字也用它；
       // 本时段的记录数放在下一行，避免「排名 1 却写着 1 条」这种看起来自相矛盾的画面
       const hasHist = x.historyCount !== null && x.historyCount !== undefined;
       const main = hasHist ? x.historyCount : x.count;
-      // 「条」写进标签里而不是单列一个字：这样整行读作「212 条历史记录」，
-      // 与下面「本时段 正常 n 条 · 疑问 n 条」的单位一致，不会出现「212 历史记录」这种缺量词的读法
-      const mainLabel = hasHist ? '条历史记录' : '条本时段记录';
+      // 「条」写进标签里而不是单列一个字：这样整行读作「212 条近两年记录」，
+      // 与下面「本时段 正常 n 条 · 疑问 n 条」的单位一致，不会出现「212 近两年记录」这种缺量词的读法
+      const mainLabel = hasHist ? '条近两年记录' : '条本时段记录';
       // 本时段记录拆成「正常 / 疑问（红色标记）」两块。
       // 上游按 outside_type 做的是记录级拆分，逐种核对满足「全部 = 正常 + 疑问」，
       // 所以这里直接用减法得到正常条数，不再多跑一次上游查询。
@@ -877,14 +877,14 @@ function renderHot(data) {
         <div class="hc-badges">${badges}${liferBadge}${doubtBadge}</div>
         <div class="hc-foot"><span class="n">${fmt(main)}</span><span class="l">${esc(mainLabel)}</span></div>
         <div class="hc-hist">${histLine}</div>
-        <div class="bar-track hc-bar" title="历史稀有度 ${rar}%（按该地区全时段记录数，越少越稀有）"><div class="bar-fill" style="width:${Math.max(2, rar)}%"></div></div>
+        <div class="bar-track hc-bar" title="历史稀有度 ${rar}%（按该地区最近两年记录数，越少越稀有）"><div class="bar-fill" style="width:${Math.max(2, rar)}%"></div></div>
       </div>`;
     })
     .join('');
 
   const basis = s.historyUsed
-    ? `排序依据：${esc(data.region || '')}历史全时段记录数 ${fmt(s.minCount ?? 0)} ~ ${fmt(s.maxCount ?? 0)} 条，越少越稀有`
-    : `<span class="warn">历史稀有度暂时取不到${s.historyError ? '（' + esc(s.historyError) + '）' : ''}，已按本时段记录数排序</span>`;
+    ? `排序依据：${esc(data.region || '')}最近两年（${HISTORY_WINDOW_START} 起）记录数 ${fmt(s.minCount ?? 0)} ~ ${fmt(s.maxCount ?? 0)} 条，越少越稀有`
+    : `<span class="warn">最近两年记录数暂时取不到${s.historyError ? '（' + esc(s.historyError) + '）' : ''}，已按本时段记录数排序</span>`;
   // 疑问数据：有人被标疑才提，没人被标疑就不占用脚注
   const doubtInfo = s.doubtError
     ? `<span class="warn">疑问数据标记暂时取不到</span>`
@@ -1146,10 +1146,12 @@ async function searchTaxon() {
  * ---------------------------------------------------------------- */
 const LEVEL_RANK = { 国家一级: 1, 国家二级: 2, 三有: 3 };
 const DETAIL_PAGE_SIZE = 20;          // 鸟种明细：前端分页
-const DETAIL_REPORT_PAGE_SIZE = 50;   // 报告明细：上游单页上限，由服务端分页
+const DETAIL_REPORT_PAGE_SIZE = 10;   // 报告明细：每页 10 条（与记录中心站点一致），由服务端分页；上游单页上限是 50
+// 「历史稀有度」的窗口起点 —— 与服务端 loadHistory 的 historyWindowStart 同一规则（去年 1 月 1 日 ≈ 最近两年）
+const HISTORY_WINDOW_START = `${new Date().getFullYear() - 1}-01-01`;
 
 /**
- * 明细里的稀有度排序键 —— 与榜单一致：优先用「历史全时段记录数」，
+ * 明细里的稀有度排序键 —— 与榜单一致：优先用「最近两年记录数」，
  * 历史缺失时退回本时段记录数。
  */
 const detailRarityKey = (x) => (x.historyCount === null || x.historyCount === undefined ? x.count : x.historyCount);
@@ -1272,7 +1274,7 @@ function applyDetailFilter(resetPage) {
         return la !== lb ? la - lb : detailRarityKey(a) - detailRarityKey(b);
       });
     } else {
-      // 与榜单同一口径：该地区**历史全时段**记录数越少越稀有，排越前
+      // 与榜单同一口径：该地区**最近两年**记录数越少越稀有，排越前
       rows.sort(
         (a, b) =>
           detailRarityKey(a) - detailRarityKey(b) ||
@@ -1294,9 +1296,9 @@ function detailSubText() {
     parts.push(`合计 <strong>${fmt(detail.rows.reduce((s, x) => s + x.count, 0))}</strong> 条记录`);
     // 排序依据是历史口径，这里明确写出来，免得用户拿「记录数」列去对排名
     if (m.historyUsed) {
-      parts.push(`排序依据：该地区历史全时段记录数（<strong>${fmt(m.historyMatched)}</strong> 种有历史记录）`);
+      parts.push(`排序依据：该地区最近两年（${HISTORY_WINDOW_START} 起）记录数（<strong>${fmt(m.historyMatched)}</strong> 种有记录）`);
     } else {
-      parts.push(`<span class="warn">历史口径暂不可用，已按本时段记录数排序</span>`);
+      parts.push(`<span class="warn">最近两年口径暂不可用，已按本时段记录数排序</span>`);
     }
     const dq = detail.rows.filter((x) => x.doubt);
     if (m.doubtError) parts.push(`<span class="warn">疑问数据标记暂时取不到</span>`);
@@ -1311,11 +1313,11 @@ function detailSubText() {
       // 数字，减出来的「未公开份数」跟这一种鸟对不上，会给出一个误导性的值。所以这里
       // 只报这一种鸟的公开报告数，不提「未公开」。
       parts.push(`本时段有 <strong>${fmt(total)}</strong> 份公开报告，本页 <strong>${fmt(detail.rows.length)}</strong> 份`);
-      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`上游单页上限 ${DETAIL_REPORT_PAGE_SIZE} 份，用下方按钮翻页`);
+      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`共 ${detail.pages} 页，用下方按钮翻页`);
     } else {
       const priv = detail.metric === 'open' ? 0 : Math.max(0, (ov.reportNum ?? total) - (ov.openReportNum ?? total));
       parts.push(`上游共 <strong>${fmt(total)}</strong> 份公开报告，本页 <strong>${fmt(detail.rows.length)}</strong> 份`);
-      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`上游单页上限 ${DETAIL_REPORT_PAGE_SIZE} 份，用下方按钮翻页`);
+      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`共 ${detail.pages} 页，用下方按钮翻页`);
       if (priv) parts.push(`<span class="warn">另有 ${fmt(priv)} 份未公开，上游不提供明细</span>`);
     }
   }
@@ -1335,7 +1337,7 @@ function taxonRow(x, no) {
     <td><div class="d-name${x.doubt ? ' is-doubt' : ''}${x.lifer ? ' is-lifer' : ''}">${esc(x.name)}${liferTag}</div><div class="d-latin">${esc(x.latin || '')}</div></td>
     <td class="d-dim">${esc([x.order, x.family].filter(Boolean).join(' · '))}</td>
     <td class="ta-r num strong" data-label="本时段">${fmt(x.count)}</td>
-    <td class="ta-r num" data-label="历史">${hist}</td>
+    <td class="ta-r num" data-label="近两年">${hist}</td>
     <td class="ta-r num${x.doubt ? ' is-doubt' : ''}">${doubt}</td>
     <td><div class="badges">${levelBadge(x)}${x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : ''}${iucnBadge(x.iucn)}</div></td>
   </tr>`;
@@ -1395,7 +1397,7 @@ function renderDetail() {
     $('detailBody').innerHTML = `<div class="notice">${detail.q ? '本页没有匹配的记录。' : '该条件下没有明细数据。'}</div>`;
   } else if (detail.kind === 'taxon') {
     $('detailBody').innerHTML = `<table class="dtable">
-      <thead><tr><th class="ta-c">#</th><th>中文名 / 学名</th><th>目 · 科</th><th class="ta-r">本时段记录</th><th class="ta-r">历史记录</th><th class="ta-r">疑问数据</th><th>保护等级</th></tr></thead>
+      <thead><tr><th class="ta-c">#</th><th>中文名 / 学名</th><th>目 · 科</th><th class="ta-r">本时段记录</th><th class="ta-r">近两年记录</th><th class="ta-r">疑问数据</th><th>保护等级</th></tr></thead>
       <tbody>${rows.map((x, i) => taxonRow(x, offset + i + 1)).join('')}</tbody>
     </table>`;
   } else {

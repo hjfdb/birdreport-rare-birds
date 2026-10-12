@@ -59,10 +59,11 @@ const CACHE_TTL_TEXT = `${Math.round(CACHE_TTL_MS / 60000)} 分钟`;
  */
 const HOT_TTL_MS = Number(process.env.HOT_TTL_MS || 24 * 60 * 60 * 1000);
 /**
- * 「历史稀有度」数据源（该地区**不带时间范围**的鸟种记录数）单独一份缓存。
- * 它是榜单排序的依据，与榜单同节奏：一天失效一次。
+ * 「历史稀有度」数据源（该地区**最近两年**的鸟种记录数）单独一份缓存。
+ * 口径固定（锚在去年 1 月 1 日）、数据变化很慢，所以缓存一个月：
+ * 一个月内所有请求都命中本地，不再向上游发这份慢查询。
  */
-const HISTORY_TTL_MS = Number(process.env.HISTORY_TTL_MS || 24 * 60 * 60 * 1000);
+const HISTORY_TTL_MS = Number(process.env.HISTORY_TTL_MS || 30 * 24 * 60 * 60 * 1000);
 /**
  * 「疑问数据」标记（上游 AI 半自动鸟种标疑）单独一份缓存。
  * 它和榜单一样是按「区域 + 时段」聚合的慢查询，同节奏：一天失效一次。
@@ -222,7 +223,8 @@ function regionLabel(where) {
 
 /**
  * 只保留行政区条件的 where —— 「历史」口径用。
- * 「历史」= 当前选择的区域 + **不加时间范围**，也不带记录检索条件，
+ * 「历史」= 当前选择的区域 + 固定的「最近两年」窗口（时间由 loadHistory 自己加，
+ * 不再来自用户选的时间），也不带记录检索条件 ——
  * 这样得到的记录数才是「这种鸟在该地区整体有多常见」的稳定基線。
  */
 function regionOnlyWhere(where) {
@@ -323,26 +325,53 @@ const regionSpeciesLoader = (where) => async () => {
 };
 
 /* ------------------------------------------------------------------ *
- * 历史稀有度：该地区「不加时间范围」的各鸟种记录数
+ * 历史稀有度：该地区**最近两年**（去年 1 月 1 日起至今）的各鸟种记录数
  *
  * 为什么需要它：如果只用当前时段的记录数排序，窗口一窄（比如「当天」）几乎所有
- * 鸟种都是 1 条，排序就没有信息量。改成本地区**历史全时段**的记录数来排，
- * 「这种鸟在北京历史上总共只被记录过 3 次」才是真正的稀有信号。
+ * 鸟种都是 1 条，排序就没有信息量。改用**最近两年**的记录数来排，
+ * 「这种鸟在北京这两年总共只被记录过 3 次」才是真正的稀有信号。
+ *
+ * 为什么是「最近两年」而不是全时段：全时段在大地区上是很重的聚合
+ * （北京经常要 20 秒以上、还时不时 500），两年窗口既有足够的统计量、
+ * 上游也更扛得住；口径固定（锚在去年 1 月 1 日）配合**一个月的缓存**，
+ * 一个地区一年里基本只回源十几次。
  *
  * 榜单成员仍然只看当前时段：**这段时间里出现过哪些鸟** → 用带时间的查询；
- * **谁更稀有** → 用不带时间的查询。两份数据分开缓存。
+ * **谁更稀有** → 用这个两年窗口的查询。两份数据分开缓存。
  *
- * 实测（2026-10）：北京市不带时间返回 1211 行 / 733 个中文名，4.4 秒；
- * 浙江省 1326 行 / 785 个中文名，3.2 秒。范围内出现的 id 可能同时含 G3 / Z4
- * 两个名录版本，所以按 taxon_id 各自计数，并额外用拉丁名做一层兜底索引。
+ * 实测（2026-10，北京市）：2025-01-01 ~ 今天 返回 570 行 / 570 个中文名，
+ * 约 16 秒（偶发首次 500、重试即过）；常见鸟的两年记录数约为全时段的六成
+ * （灰喜鹊 39051 vs 65708），口径内部一致。范围内出现的 id 可能同时含
+ * G3 / Z4 两个名录版本，所以按 taxon_id 各自计数，并额外用拉丁名做兜底索引。
  * ------------------------------------------------------------------ */
 
 /** 拉丁名归一化：只留字母，便于跨名录版本对齐同一鸟种 */
 const latinKey = (s) => String(s ?? '').replace(/[^a-z]/gi, '').toLowerCase();
 
-const historyLoader = (region) => async () => {
-  const r = await getRegionTaxons(region, { limit: 2000 });
+/**
+ * 「最近两年」的起点：去年 1 月 1 日（2026 年 → 2025-01-01）。
+ * 它同时进缓存键：跨年时起点变化，旧缓存自然不再命中，不会把上一年的
+ * 窗口当成新窗口继续用。
+ */
+function historyWindowStart(now = new Date()) {
+  return `${now.getFullYear() - 1}-01-01`;
+}
+
+/** 本地时区的今天（YYYY-MM-DD） —— 别用 toISOString，那是 UTC，凌晨会差一天 */
+function todayYmd(now = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+const historyLoader = (region, startTime, endTime) => async () => {
+  // 这条查询又慢又偶发 500：回源时把实际请求参数、返回行数与耗时都打进日志，便于排障 / 对账。
+  // 参数与服务端最终发给上游的完全一致（直辖市在这里已经是「只有 province」的形态）。
+  const where = { ...region, startTime, endTime };
+  const t0 = Date.now();
+  console.log(`[api] 历史稀有度回源：${JSON.stringify(where)}（page=1 limit=2000）`);
+  const r = await getRegionTaxons(where, { limit: 2000 });
   const rows = r.data || [];
+  console.log(`[api] 历史稀有度取回：${rows.length} 行 / count=${r.count ?? '?'}，耗时 ${Date.now() - t0}ms`);
   const byId = {};
   const byLatin = {};
   for (const t of rows) {
@@ -356,18 +385,40 @@ const historyLoader = (region) => async () => {
 };
 
 /**
- * 取历史稀有度。上游偶发失败（风控 / 范围过大）时**只降级、不缓存**：
- * 返回 error，调用方退回「按本时段记录数排序」，榜单照常可用。
+ * 取历史稀有度。上游失败（风控 / 宽窗口 500）时**不会把失败写进主缓存**，
+ * 而是补一次重试；仍失败就留一个**短命的失败标记** —— 接下来这一小段时间里
+ * 所有请求直接降级、不再重复打这条慢查询（否则「一次失败 → 每次浏览都重试」，
+ * 既慢又白喂上游）。点「刷新数据」（nocache）会绕过标记立即重试。
  */
 async function loadHistory(where, nocache = false) {
   const region = regionOnlyWhere(where);
   if (!region.province) return { byId: {}, byLatin: {}, speciesCount: 0, meta: null, error: '缺少区域条件' };
+  // 窗口 = 去年 1 月 1 日 ~ 今天（"最近两年"）。起点进缓存键、跨年自动换键；
+  // 结束时间是取数当天的日期，但**不进键** —— 否则每天一个新键，等于天天回源。
+  const startTime = historyWindowStart();
+  const endTime = todayYmd();
+  const key = whereKey(region, `history:${startTime}`);
+  const loader = historyLoader(region, startTime, endTime);
   try {
-    const { value, meta } = await cached(whereKey(region, 'history'), historyLoader(region), nocache, { ttl: HISTORY_TTL_MS });
+    const { value, meta } = await cached(key, loader, nocache, { ttl: HISTORY_TTL_MS });
+    // 命中「失败标记」：不久前刚失败过，这一小段时间内不再回源
+    if (value.failed) {
+      console.warn(`[api] 历史稀有度命中失败标记（${Math.round(DEGRADED_TTL_MS / 60000)} 分钟内不再回源）：${JSON.stringify({ ...region, startTime, endTime })}`);
+      return { byId: {}, byLatin: {}, speciesCount: 0, meta, error: value.failed };
+    }
     return { ...value, meta, error: '' };
   } catch (e) {
-    console.warn('[api] 历史稀有度取不到，本次退回按本时段记录数排序：' + e.message);
-    return { byId: {}, byLatin: {}, speciesCount: 0, meta: null, error: e.message };
+    // 上游对宽窗口偶发 500（实测很常见），补一次重试 —— api() 对 500 是立即失败，
+    // 重试只能在这一层做。多数情况下第二次就过；过了就能按一个月缓存住。
+    console.warn(`[api] 历史稀有度本次回源失败（请求参数见上方日志），补一次重试：` + e.message);
+    try {
+      const { value, meta } = await cached(key, loader, true, { ttl: HISTORY_TTL_MS });
+      return { ...value, meta, error: '' };
+    } catch (e2) {
+      cache.set(key, { byId: {}, byLatin: {}, speciesCount: 0, rowCount: 0, total: 0, failed: e2.message }, { ttl: DEGRADED_TTL_MS });
+      console.warn('[api] 历史稀有度取不到（重试后仍失败），本次退回按本时段记录数排序：' + e2.message);
+      return { byId: {}, byLatin: {}, speciesCount: 0, meta: null, error: e2.message };
+    }
   }
 }
 
@@ -604,7 +655,7 @@ async function rankByHistory(list, where, nocache) {
 }
 
 /**
- * 「稀有度」排序键：优先用「历史全时段记录数」（该地区不加时间范围），
+ * 「稀有度」排序键：优先用「历史记录数」（该地区最近两年），
  * 历史取不到时退回本时段记录数，保证榜单总有可用的顺序。
  */
 const rarityKey = (x) => (x.historyCount === null || x.historyCount === undefined ? Number(x.count) || 0 : x.historyCount);
@@ -676,11 +727,14 @@ async function loadTaxons(where, { ensure = 160, nocache = false } = {}) {
 }
 
 /**
- * 上游报告明细单页上限：limit > 50 会直接返回空。
- * 这里**只取当前这一页**，不再向上游翻页聚合（翻 10 页既慢又容易踩上游风控），
+ * 报告明细每页条数：默认 10，上限 50。
+ * 上限是上游的硬限制（limit > 50 直接返回空）；另外实测**不传 limit 会 500**
+ * （上游按「结果集过大」处理：北京·东城区·单日 也照挂），所以每页条数必须显式传。
+ * 这里**只取当前这一页**，不再向上游翻页聚合（一次翻多页既慢又容易踩上游风控），
  * 需要更多就由前端翻页，一页一次请求。
  */
-const RECORDS_PAGE_SIZE = 50;
+const RECORDS_PAGE_SIZE = 10;  // 不传 limit 时的默认每页条数
+const RECORDS_LIMIT_MAX = 50;  // 上游单页上限
 
 /**
  * 上游报告详情页的签名。
@@ -972,7 +1026,7 @@ const routes = {
 
   // 本地稀有鸟种排行
   //   成员 = 当前时段内出现过的鸟种（带时间的 record/activity/taxon）
-  //   排序 = 该地区**历史全时段**的记录数升序（不带时间的查询）
+  //   排序 = 该地区**最近两年**的记录数升序（去年 1 月 1 日起）
   //   标记 = 当前时段被上游 AI 标疑（outside_type=1，站点显示为红色）的记录
   // 三份口径分开缓存：榜单 24 小时、历史 24 小时、疑问标记 24 小时，互不影响。
   async 'GET /api/hot'(q) {
@@ -1035,7 +1089,7 @@ const routes = {
     else if (filter === 'doubt') list = list.filter((x) => x.doubt);
     else if (filter === 'lifer') list = list.filter((x) => x.lifer);
 
-    // min / max 都取「历史全时段」口径（即排序依据本身）
+    // min / max 都取「最近两年」口径（即排序依据本身）
     const keys = list.map(rarityKey);
     const maxCount = keys.reduce((m, v) => Math.max(m, v), 0) || 1;
     const minCount = keys.reduce((m, v) => Math.min(m, v), Infinity);
@@ -1100,7 +1154,7 @@ const routes = {
 
   // 完整鸟种明细：给「记录鸟种数」下钻用，不受榜单 top / 筛选影响。
   // 成员与榜单一致（当前时段出现过的鸟种），但稀有度同样按
-  // 「该地区历史全时段（不加时间范围）的记录数」计算并排序。
+  // 「该地区最近两年（去年 1 月 1 日起）的记录数」计算并排序。
   async 'GET /api/taxons'(q) {
     const where = buildWhere(q);
     if (!where.province) {
@@ -1211,8 +1265,8 @@ const routes = {
     };
   },
 
-  // 报告 / 记录明细。上游限制：单页 limit > 50 会直接返回空。
-  // 这里**只取上游的一页**（默认 50 条），翻页由前端一页一次请求驱动 ——
+  // 报告 / 记录明细。上游限制：单页 limit > 50 会直接返回空，不传 limit 会 500。
+  // 这里**只取上游的一页**（默认每页 10 条），翻页由前端一页一次请求驱动 ——
   // 不再把 10 页一次性抓回来聚合成全量列表（既慢又容易触发上游风控）。
   async 'GET /api/records'(q) {
     const where = buildWhere(q);
@@ -1221,7 +1275,7 @@ const routes = {
     }
 
     const page = Math.max(1, Math.floor(Number(q.get('page')) || 1));
-    const limit = Math.min(Math.max(1, Math.floor(Number(q.get('limit')) || RECORDS_PAGE_SIZE)), RECORDS_PAGE_SIZE);
+    const limit = Math.min(Math.max(1, Math.floor(Number(q.get('limit')) || RECORDS_PAGE_SIZE)), RECORDS_LIMIT_MAX);
 
     const { value, meta } = await cached(
       whereKey(where, `records:${page}:${limit}`),

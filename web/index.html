@@ -121,7 +121,7 @@
               <option value="doubt">仅含疑问数据（上游标疑）</option>
             </select>
             <select id="selSort" class="mini-select">
-              <option value="record">按稀有度（历史记录少→多）</option>
+              <option value="record">按稀有度（近两年记录少→多）</option>
               <option value="protection">按保护等级</option>
             </select>
             <button class="btn btn-mini" id="btnRefresh" title="忽略本地缓存，重新向上游取一次数据">刷新数据</button>
@@ -174,8 +174,8 @@
         保护等级来自《国家重点保护野生动物名录》(2021)、《有重要生态、科学、社会价值的陆生野生动物名录》、IUCN 红色名录与中国生物多样性红色名录。
       </p>
       <p>
-        缓存策略：榜单（本时段鸟种清单）、「历史稀有度」（该地区不加时间范围的记录数）与「疑问数据」标记各存一份，都缓存 <strong>24 小时</strong>，一天失效一次；
-        概览与趋势等统计缓存 <strong>10 分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code
+        缓存策略：榜单（本时段鸟种清单）与「疑问数据」标记各存一份，都缓存 <strong>24 小时</strong>，一天失效一次；
+        「历史稀有度」（该地区<strong>最近两年</strong>、去年 1 月 1 日起的记录数）缓存 <strong>一个月</strong>；概览与趋势等统计缓存 <strong>10 分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code
           id="cacheBackend">data/api-cache.json</code>，服务重启后自动读入内存继续复用。
         同一地区只向上游取一次，切换筛选 / 排序 / 翻页直接复用缓存。需要最新数据时点「刷新数据」。
       </p>
@@ -213,7 +213,7 @@
       <div class="detail-tools">
         <input type="search" id="dSearch" placeholder="筛选…" />
         <select id="dSort" class="mini-select">
-          <option value="record">按稀有度（历史记录少→多）</option>
+          <option value="record">按稀有度（近两年记录少→多）</option>
           <option value="protection">按保护等级排序</option>
         </select>
       </div>
@@ -246,7 +246,7 @@
         <div class="my-form" id="myForm">
           <label for="inpLifer">记录中心用户名</label>
           <div class="my-form-row">
-            <input type="text" id="inpLifer" value="kkia" placeholder="例如 kkia" autocomplete="off" spellcheck="false"
+            <input type="text" id="inpLifer" placeholder="例如 kkia" autocomplete="off" spellcheck="false"
               enterkeyhint="go" />
             <button class="btn btn-primary" id="btnLiferBind">绑定</button>
           </div>
