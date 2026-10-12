@@ -79,6 +79,28 @@ jobs:
         # macOS 上这一步内部还会补一次 ad-hoc 签名（见 build-exe.mjs 的 stageInject）
         run: node build-exe.mjs
 
+      - name: 打包 zip
+        # 顺序很重要：**先打包、再冒烟**。冒烟验的是解压出来的那个文件，zip 得先存在
+        # （第一版把这两步写反了，三个平台一起卡在「找不到 zip」）。
+        # Windows 的 exe 约 86MB，压成 zip 约 33MB，下载量少 60%。
+        # macOS 必须用 zip 而不是 Compress-Archive：后者不写 Unix 权限位，解压出来没有
+        # 可执行位就双击没反应。
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:GITHUB_WORKSPACE "dist/$env:EXE_NAME"
+          $zip = Join-Path $env:GITHUB_WORKSPACE "dist/$env:ASSET_NAME"
+          if ($IsWindows) {
+            Compress-Archive -LiteralPath $bin -DestinationPath $zip -CompressionLevel Optimal -Force
+          } else {
+            Push-Location (Join-Path $env:GITHUB_WORKSPACE 'dist')
+            try {
+              & zip -q -9 -X $env:ASSET_NAME $env:EXE_NAME
+              if ($LASTEXITCODE -ne 0) { throw "zip 失败（退出码 $LASTEXITCODE）" }
+            } finally { Pop-Location }
+          }
+          $mb = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
+          Write-Host "已打包：$zip（$mb MB）"
+
       - name: 冒烟验证（解压发布包 → 起二进制 → 打 /api/health）
         # 构建成功不等于产物能用。这里**解压 zip 再跑解压出来的那个文件**，而不是直接跑
         # dist/ 下的构建产物 —— 这样连「zip 有没有把可执行位保留下来」一起验了（macOS 上
@@ -126,26 +148,6 @@ jobs:
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }
-
-      - name: 打包 zip
-        # Windows 的 exe 约 86MB，压成 zip 约 33MB，下载量少 60%。
-        # macOS 必须用 zip 而不是 Compress-Archive：后者不写 Unix 权限位，解压出来没有
-        # 可执行位就双击没反应。
-        shell: pwsh
-        run: |
-          $bin = Join-Path $env:GITHUB_WORKSPACE "dist/$env:EXE_NAME"
-          $zip = Join-Path $env:GITHUB_WORKSPACE "dist/$env:ASSET_NAME"
-          if ($IsWindows) {
-            Compress-Archive -LiteralPath $bin -DestinationPath $zip -CompressionLevel Optimal -Force
-          } else {
-            Push-Location (Join-Path $env:GITHUB_WORKSPACE 'dist')
-            try {
-              & zip -q -9 -X $env:ASSET_NAME $env:EXE_NAME
-              if ($LASTEXITCODE -ne 0) { throw "zip 失败（退出码 $LASTEXITCODE）" }
-            } finally { Pop-Location }
-          }
-          $mb = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
-          Write-Host "已打包：$zip（$mb MB）"
 
       - name: 上传构建产物
         # 发布 job 靠它拿到三个平台的 zip；手动试跑时也是从这里下载
