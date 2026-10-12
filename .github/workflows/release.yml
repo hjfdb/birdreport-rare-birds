@@ -1,27 +1,45 @@
-name: 发布 exe
+name: 发布
 
-# 打 v* 的 tag 就自动构建并发布 Release：
+# 打 v* 的 tag 就自动为三个平台构建并发布 Release：
 #   git tag v1.0.0 && git push origin v1.0.0
 #
-# 也能在 Actions 页面手动点「Run workflow」试跑：只构建 + 存 artifact，不碰 Release。
+# 也能在 Actions 页面手动点「Run workflow」试跑：只构建、把产物存成 artifact，不建 Release。
+#
+# 为什么是两个 job：三个平台要并行构建，但**发布只能由一个 job 干** —— 三个 job 同时
+# 调 gh release create 会互相抢（幂等判断能兜住「已存在」，兜不住「两个同时看到不存在」）。
+# 所以 build 并行出产物，release 等它们全好了再一次性把三个 zip 挂上去。
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
 
-# 建 Release 需要写权限；除此之外不给任何多余权限
+# 默认最小权限；只有 release job 需要写权限（建 Release）
 permissions:
-  contents: write
+  contents: read
 
-# 同一个 tag 不允许并发跑两次，避免两个 job 抢着建同一个 Release
+# 同一个 tag 不允许并发跑两次
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  build:
+    strategy:
+      # 某个平台挂了不要连累其他平台：至少能看清是哪一个平台的问题
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win-x64
+            ext: '.exe'
+          - os: macos-latest # Apple Silicon（arm64）；Intel 用下面的 macos-15-intel
+            target: mac-arm64
+            ext: ''
+          - os: macos-15-intel # Intel（x64）
+            target: mac-x64
+            ext: ''
+    runs-on: ${{ matrix.os }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -29,10 +47,9 @@ jobs:
       - name: 安装 Node
         uses: actions/setup-node@v7
         with:
-          # 必须钉死，不能只写 '24'：
-          # exe 是「复制这份 node.exe + 注入 SEA blob」做出来的（build-exe.mjs 第 4 步），
-          # 所以发布出去的 exe 里跑的 Node 就是这个版本。要与本机构建保持一致，
-          # 否则用户拿到的运行时和你测过的不是同一个。升本地 Node 时记得同步改这里。
+          # 必须钉死，不能只写 '24'：产物是「复制这份 node + 注入 SEA blob」做出来的
+          # （build-exe.mjs 第 4 步），所以发布出去的程序里跑的 Node 就是这个版本。
+          # 要与本机构建保持一致，否则用户拿到的运行时和你测过的不是同一个。
           node-version: '24.13.0'
           cache: npm
 
@@ -47,38 +64,58 @@ jobs:
           else
             VERSION="dev-${GITHUB_SHA:0:7}"
           fi
-          # exe 保持中文名，跟本地 `npm run build:exe` 的产物一致，双击时看得懂
-          echo "EXE_NAME=观鸟地区稀有榜-${VERSION}-win-x64.exe" >> "$GITHUB_ENV"
-          # 但**发布用的文件名必须是纯 ASCII**：实测 gh 在推导 Release 附件名时会
-          # 剥掉所有非 ASCII 字符（「观鸟-中文名测试.zip」会变成「-.zip」）。
-          # ASCII 名另外还有好处：URL 不做百分号转义，curl / wget / 下载器都不出乱码。
-          # zip **内部**的中文名不受影响，解压出来仍是「观鸟地区稀有榜-….exe」。
-          echo "ASSET_NAME=birdreport-rare-birds-${VERSION}-win-x64.zip" >> "$GITHUB_ENV"
-          echo "  ▸ exe    ：观鸟地区稀有榜-${VERSION}-win-x64.exe"
-          echo "  ▸ 发布包 ：birdreport-rare-birds-${VERSION}-win-x64.zip"
+          # 二进制保持中文名，跟本地 `npm run build:exe` 的产物一致，双击 / 终端里看得懂。
+          # macOS 上是裸的可执行文件（无扩展名），Windows 上是 .exe。
+          echo "EXE_NAME=观鸟地区稀有榜-${VERSION}-${{ matrix.target }}${{ matrix.ext }}" >> "$GITHUB_ENV"
+          # 但**发布用的文件名必须是纯 ASCII**：实测 gh 在推导 Release 附件名时会剥掉所有
+          # 非 ASCII 字符（「观鸟-中文名测试.zip」会变成「-.zip」）。ASCII 名另外还有好处：
+          # URL 不做百分号转义，curl / wget / 下载器都不出乱码。
+          # zip **内部**的中文名不受影响，解压出来仍是「观鸟地区稀有榜-…」。
+          echo "ASSET_NAME=birdreport-rare-birds-${VERSION}-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
+          echo "  ▸ 二进制 ：观鸟地区稀有榜-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
+          echo "  ▸ 发布包 ：birdreport-rare-birds-${VERSION}-${{ matrix.target }}.zip"
 
-      - name: 构建 exe
+      - name: 构建
+        # macOS 上这一步内部还会补一次 ad-hoc 签名（见 build-exe.mjs 的 stageInject）
         run: node build-exe.mjs
 
-      - name: 冒烟验证（起 exe → 打 /api/health）
-        # 构建成功不等于 exe 能用。这一步真把 exe 跑起来打一次健康检查，
+      - name: 冒烟验证（解压发布包 → 起二进制 → 打 /api/health）
+        # 构建成功不等于产物能用。这里**解压 zip 再跑解压出来的那个文件**，而不是直接跑
+        # dist/ 下的构建产物 —— 这样连「zip 有没有把可执行位保留下来」一起验了（macOS 上
+        # 这一点尤其关键：丢了可执行位用户双击就是没反应）。
         # 失败就让整个 job 失败 —— 坏包发不出去。
         shell: pwsh
         env:
-          OPEN_BROWSER: '0' # 否则 exe 会试着开浏览器（CI 里没有）
+          OPEN_BROWSER: '0' # 否则二进制会试着开浏览器（CI 里没有）
           HOST: '127.0.0.1'
           PORT: '8799'
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\$env:EXE_NAME"
-          if (-not (Test-Path -LiteralPath $exe)) { throw "没找到产物：$exe" }
-          Write-Host "启动 $exe"
+          $tmp = Join-Path $env:RUNNER_TEMP 'smoke'
+          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
-          $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          # 解压要用各平台的原生工具：macOS 上**不能**用 Expand-Archive ——
+          # PowerShell 的 Expand-Archive 不还原 Unix 可执行位，会测出一个假失败。
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath "dist/$env:ASSET_NAME" -DestinationPath $tmp
+          } else {
+            & unzip -q "dist/$env:ASSET_NAME" -d $tmp
+            if ($LASTEXITCODE -ne 0) { throw "unzip 失败（退出码 $LASTEXITCODE）" }
+          }
+
+          $bin = Join-Path $tmp $env:EXE_NAME
+          if (-not (Test-Path -LiteralPath $bin)) { throw "解压后没找到二进制：$bin" }
+          if (-not $IsWindows) { & ls -l $bin }   # 打出权限位，便于确认
+
+          $opts = @{ FilePath = $bin; PassThru = $true }
+          if ($IsWindows) { $opts.WindowStyle = 'Hidden' }  # 这个参数只有 Windows 有
+          Write-Host "启动 $bin"
+          $proc = Start-Process @opts
           try {
             $resp = $null
             for ($i = 0; $i -lt 40; $i++) {
               Start-Sleep -Seconds 1
-              if ($proc.HasExited) { throw "exe 提前退出了（退出码 $($proc.ExitCode)）" }
+              if ($proc.HasExited) { throw "二进制提前退出了（退出码 $($proc.ExitCode)）" }
               try {
                 $r = Invoke-RestMethod -Uri "http://127.0.0.1:$env:PORT/api/health" -TimeoutSec 3
                 if ($r.ok) { $resp = $r; break }
@@ -91,44 +128,71 @@ jobs:
           }
 
       - name: 打包 zip
-        # 86MB 的 exe 压成 zip 约 33MB，下载量少 60%。
-        # 用 PowerShell 自带的 Compress-Archive，不额外引工具。
+        # Windows 的 exe 约 86MB，压成 zip 约 33MB，下载量少 60%。
+        # macOS 必须用 zip 而不是 Compress-Archive：后者不写 Unix 权限位，解压出来没有
+        # 可执行位就双击没反应。
         shell: pwsh
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\$env:EXE_NAME"
-          $zip = Join-Path $env:GITHUB_WORKSPACE "dist\$env:ASSET_NAME"
-          Compress-Archive -LiteralPath $exe -DestinationPath $zip -CompressionLevel Optimal -Force
+          $bin = Join-Path $env:GITHUB_WORKSPACE "dist/$env:EXE_NAME"
+          $zip = Join-Path $env:GITHUB_WORKSPACE "dist/$env:ASSET_NAME"
+          if ($IsWindows) {
+            Compress-Archive -LiteralPath $bin -DestinationPath $zip -CompressionLevel Optimal -Force
+          } else {
+            Push-Location (Join-Path $env:GITHUB_WORKSPACE 'dist')
+            try {
+              & zip -q -9 -X $env:ASSET_NAME $env:EXE_NAME
+              if ($LASTEXITCODE -ne 0) { throw "zip 失败（退出码 $LASTEXITCODE）" }
+            } finally { Pop-Location }
+          }
           $mb = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
           Write-Host "已打包：$zip（$mb MB）"
 
+      - name: 上传构建产物
+        # 发布 job 靠它拿到三个平台的 zip；手动试跑时也是从这里下载
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.zip
+          # 已经是 zip 了，再压一遍没意义
+          compression-level: 0
+          retention-days: 7
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 取回三个平台的产物
+        uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
       - name: 发布 Release
-        if: github.ref_type == 'tag'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 这个 job 没有 checkout，得显式告诉 gh 是哪个仓库
+          GH_REPO: ${{ github.repository }}
         run: |
+          echo "待发布的附件："
+          ls -la assets
+
           # 带连字符的 tag（如 v0.0.1-beta）按 semver 惯例视为预发布版，
           # GitHub 上会标成 Pre-release；v1.0.0 这种就是正式版。
           ARGS=(--title "$GITHUB_REF_NAME" --verify-tag --generate-notes)
           case "$GITHUB_REF_NAME" in *-*) ARGS+=(--prerelease);; esac
 
-          # gh release create 不是幂等的：若同名 Release 已存在（典型情况是先在
-          # 网页上建好了 Release 或草稿、之后才推 tag），它只会报「已存在」然后
-          # 整个 job 失败，产物根本传不上去 —— 线上就留下一个没有附件的空 Release。
-          # （v0.0.2 就踩过这个坑。）所以先探一下：
+          # gh release create 不是幂等的：若同名 Release 已存在（典型情况是先在网页上建好了
+          # Release 或草稿、之后才推 tag），它只会报「已存在」然后整个 job 失败，产物根本传不
+          # 上去 —— 线上就留下一个没有附件的空 Release。所以先探一下：
           #   已存在 → 只上传并覆盖附件，不动你已经写好的说明与预发布标记
-          #   不存在 → 照旧新建
+          #   不存在 → 照旧新建（三个附件一次挂上）
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME 已存在，改为上传并覆盖附件（保留其说明与标记）"
-            gh release upload "$GITHUB_REF_NAME" "dist/${ASSET_NAME}" --clobber
+            gh release upload "$GITHUB_REF_NAME" assets/*.zip --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "dist/${ASSET_NAME}" "${ARGS[@]}"
+            gh release create "$GITHUB_REF_NAME" assets/*.zip "${ARGS[@]}"
           fi
-
-      - name: 上传构建产物（仅手动触发时）
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v7
-        with:
-          name: exe-dev
-          path: dist/*.zip
-          retention-days: 7

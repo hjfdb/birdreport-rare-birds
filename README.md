@@ -20,16 +20,39 @@
 
 ## 快速开始
 
-### 方式一：直接下载 exe（不用装 Node）
+### 方式一：下载现成的可执行文件（不用装 Node）
 
-到 **[Releases](../../releases/latest)** 下载 `birdreport-rare-birds-vX.Y.Z-win-x64.zip`，
-解压出 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe` 后双击运行 ——
-浏览器会自动打开 <http://127.0.0.1:8787/>，关掉那个黑色控制台窗口即停止服务。
-缓存落在 exe 同级的 `data/` 目录（该位置不可写时退到用户数据目录）。
+到 **[Releases](../../releases/latest)** 按自己的系统选一个：
 
-> **这个 exe 没有代码签名**：它由 Node 官方 SEA 机制注入生成，注入会让 node.exe 原有的
-> 签名失效，而签一份自己的证书需要额外成本。首次运行时 Windows SmartScreen 可能提示
-> 「未知发布者」，点「更多信息 → 仍要运行」即可。介意的话可以按方式三自己构建。
+| 系统 | 下载 | 解压后运行 |
+| --- | --- | --- |
+| Windows | `birdreport-rare-birds-vX.Y.Z-win-x64.zip` | 双击 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe` |
+| macOS · Apple 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-arm64.zip` | 见下方命令 |
+| macOS · Intel 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-x64.zip` | 见下方命令 |
+
+不确定自己是哪种 Mac：**  → 「关于本机」，芯片写「Apple M…」选 arm64，写「Intel」选 x64。
+
+macOS 上的程序没有图形界面，在「终端」里运行（把路径换成你解压出来的那个文件）：
+
+```bash
+cd ~/Downloads
+./观鸟地区稀有榜-vX.Y.Z-mac-arm64
+```
+
+启动后浏览器会自动打开 <http://127.0.0.1:8787/>；Windows 上关掉那个黑色控制台窗口、
+macOS 上按 <kbd>Ctrl</kbd>+<kbd>C</kbd> 即停止服务。缓存落在程序同级的 `data/` 目录
+（该位置不可写时退到用户数据目录）。
+
+> **两个平台都会提示「未签名」** —— 程序由 Node 官方 SEA 机制注入生成，注入会让原签名失效，
+> 自己签证书需要额外成本：
+>
+> - **Windows**：SmartScreen 提示「未知发布者」，点「更多信息 → 仍要运行」即可。
+> - **macOS**：Gatekeeper 会**直接拦住**（「无法打开，因为 Apple 无法检查其是否包含恶意软件」），
+>   且**没有「仍要运行」按钮**。办法：在 Finder 里**右键点该文件 → 打开 → 再点「打开」**，
+>   或到 系统设置 → 隐私与安全性 底部点「仍要打开」。只需绕过一次。
+>   命令行里也可一次性解除：`xattr -d com.apple.quarantine 文件名`
+>
+> 介意的话可以按方式三自己构建。
 
 ### 方式二：从源码跑
 
@@ -42,15 +65,16 @@ node server/index.mjs
 
 可用环境变量：`PORT`（默认 8787）、`HOST`（默认 127.0.0.1）。
 
-### 方式三：自己构建 exe
+### 方式三：自己构建可执行文件
 
 ```bash
-npm install          # 装两个构建期依赖（esbuild、postject），它们不会进 exe
+npm install          # 装两个构建期依赖（esbuild、postject），它们不会进产物
 npm run build:exe    # 产物在 dist/，可用 EXE_NAME 环境变量改文件名
 ```
 
-构建走 Node 官方的 SEA：`server/` 打成单文件 CJS、`web/` 内嵌成资源、再复制一份 node.exe
-把 blob 注入进去 —— 所以**产物里跑的 Node 就是构建机上那一个**，换大版本等于换运行时。
+构建走 Node 官方的 SEA：`server/` 打成单文件 CJS、`web/` 内嵌成资源、再复制一份当前平台的
+node 二进制把 blob 注入进去 —— 所以**产物里跑的 Node 就是构建机上那一个**，换大版本等于换运行时。
+在 macOS 上构建时脚本还会自动补一次 ad-hoc 签名（注入会让 node 原签名失效，不签就跑不起来）。
 
 > 打一个 tag 就会由 GitHub Actions 自动构建并发布到 Releases，不用手动跑上面的命令 ——
 > 详见下文「发布版本」。
@@ -200,9 +224,18 @@ git tag -a v0.0.3 -m "v0.0.3"     # -a 是附注标签，带作者 / 日期 / �
 git push origin v0.0.3            # ← 必须单独推 tag，git push 不会顺带推它
 ```
 
-约 1–2 分钟后自动完成：构建 exe → **冒烟验证**（真起一次 exe 打 `/api/health`，不通就让整个
-job 失败，坏包发不出去）→ 压成 zip → 建 Release 挂上附件。产物名取自 tag：
-`birdreport-rare-birds-<tag>-win-x64.zip`。
+约 2–3 分钟后自动完成。三个平台**并行**构建（`windows-latest` / `macos-latest` arm64 /
+`macos-15-intel` x64），每个平台都会：构建 → **冒烟验证**（解压发布包、真起一次那个二进制打
+`/api/health`，不通就让整个 job 失败，坏包发不出去）→ 压成 zip。最后再由一个单独的 job
+把三个 zip 一次挂到 Release 上。
+
+产物名取自 tag，每个平台一个附件：
+
+```
+birdreport-rare-birds-<tag>-win-x64.zip
+birdreport-rare-birds-<tag>-mac-arm64.zip
+birdreport-rare-birds-<tag>-mac-x64.zip
+```
 
 **tag 怎么写决定发布形态**：
 

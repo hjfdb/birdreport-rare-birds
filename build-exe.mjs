@@ -12,7 +12,8 @@
  *      所以合出来的就是自己的代码 + 对 node: 内置模块的引用；
  *   2. 把 web/ 下的静态文件写进 sea-config.json 的 assets（内嵌资源）；
  *   3. node --experimental-sea-config 生成「准备用 blob」；
- *   4. 复制一份 node.exe，用 postject 把 blob 注入进去 —— 出来的就是 exe。
+ *   4. 复制当前平台的 node 二进制，用 postject 把 blob 注入进去 —— 出来的就是可执行文件。
+ *      macOS 上还要补一次 ad-hoc 签名（注入会让 node 自带的签名失效，见 stageInject）。
  *
  * 注意：SEA 的入口脚本必须能被当作 CommonJS 执行，
  * 所以第 1 步的产物是 .cjs（Node 22 还不支持 ESM 入口的 SEA）。
@@ -42,7 +43,8 @@ const CONFIG_FILE = path.join(BUILD, 'sea-config.json');
 const BLOB_FILE = path.join(BUILD, 'sea-prep.blob');
 const MANIFEST_FILE = path.join(BUILD, '_web-assets.json');
 
-const EXE_NAME = process.env.EXE_NAME || '观鸟地区稀有榜.exe';
+// 默认名按平台：Windows 带 .exe，macOS / Linux 是裸的可执行文件
+const EXE_NAME = process.env.EXE_NAME || (process.platform === 'win32' ? '观鸟地区稀有榜.exe' : '观鸟地区稀有榜');
 const EXE_FILE = path.join(DIST, EXE_NAME);
 
 /** postject 要认识 Node 在 node.exe 里预留的那串哨兵标记 */
@@ -120,7 +122,8 @@ function findEsbuild() {
     'esbuild',
     [
       process.env.ESBUILD,
-      path.join(ROOT, 'node_modules', '@esbuild', 'win32-x64', exe),
+      // esbuild 的平台包名就是「平台-架构」：@esbuild/win32-x64、@esbuild/darwin-arm64 …
+      path.join(ROOT, 'node_modules', '@esbuild', `${process.platform}-${process.arch}`, exe),
       path.join(ROOT, 'node_modules', '.bin', `esbuild${process.platform === 'win32' ? '.cmd' : ''}`),
     ],
     'npm i -D esbuild',
@@ -209,20 +212,41 @@ async function stageInject() {
 
   const blob = fs.readFileSync(BLOB_FILE);
 
-  // 刚复制出来的 exe 可能正被杀软扫描、占着写句柄，注入会失败 —— 等一下重试
+  // 刚复制出来的可执行文件可能正被杀软扫描、占着写句柄，注入会失败 —— 等一下重试
   let lastErr = null;
-  for (let i = 0; i < 6; i += 1) {
+  let injected = false;
+  for (let i = 0; i < 6 && !injected; i += 1) {
     await sleep(i === 0 ? 1200 : 1500);
     try {
-      await inject(EXE_FILE, 'NODE_SEA_BLOB', blob, { sentinelFuse: SEA_FUSE });
+      await inject(EXE_FILE, 'NODE_SEA_BLOB', blob, {
+        sentinelFuse: SEA_FUSE,
+        // Node SEA 在 Mach-O 上要求 blob 落在名为 NODE_SEA 的段里；postject 只在按
+        // Mach-O 处理时读这个参数，传给 PE 也无害（已核对 postject 源码）。
+        machoSegmentName: 'NODE_SEA',
+      });
+      injected = true;
       log('4/4', `已注入并产出 ${path.relative(ROOT, EXE_FILE)}（${human(fs.statSync(EXE_FILE).size)}）`);
-      return;
     } catch (e) {
       lastErr = e;
     }
   }
-  fs.rmSync(EXE_FILE, { force: true });
-  throw new Error(`注入失败（重试 6 次）：${lastErr && lastErr.message}`);
+  if (!injected) {
+    fs.rmSync(EXE_FILE, { force: true });
+    throw new Error(`注入失败（重试 6 次）：${lastErr && lastErr.message}`);
+  }
+
+  // macOS：注入会让 node 自带的签名失效，而 Apple Silicon 上签名无效的二进制**根本无法
+  // 执行**（不是警告，是启动就失败），所以必须补一次 ad-hoc 签名。
+  // --preserve-metadata=entitlements 不能省：node 的签名里带着 V8 JIT 所需的 entitlement，
+  // 丢掉之后进程会在启动时直接崩。
+  if (process.platform === 'darwin') {
+    await run(
+      'codesign',
+      ['--sign', '-', '--force', '--preserve-metadata=entitlements,requirements,flags,runtime', EXE_FILE],
+      'codesign',
+    );
+    log('4/4', '已 ad-hoc 重新签名（macOS 必需：注入让原签名失效）');
+  }
 }
 
 /* ------------------------------------------------------------------ *
