@@ -219,7 +219,11 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
-            echo "::notice::未配置 ANDROID_KEYSTORE_BASE64，release APK 将用 debug 密钥签名，仅供测试分发"
+            if [ -f android/keystore.properties ]; then
+              echo "::notice::未配置 Secrets，将使用随仓库提交的 android/keystore.properties 签名"
+            else
+              echo "::notice::未配置 Secrets 且仓库里没有 keystore.properties，release APK 将用 debug 密钥签名，仅供测试分发"
+            fi
             exit 0
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"

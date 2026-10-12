@@ -137,9 +137,11 @@ cd android
 ./gradlew :app:copyApkToDist      # 打 release 并把产物改名放进 ../dist
 ```
 
-**关于签名**：`android/keystore.properties`（连同 `.jks`）都**不在版本库里**。
+**关于签名**：签名文件（`android/keystore.properties` 连同 `android/keystore/birdreport.jks`）
+**随私有库提交**，本地构建与 CI 共用同一把钥匙 —— 这样 CI 出的 APK 就是正式签名，
+手机上不用「先卸载 debug 版再装」。
 没有这份文件时构建不会失败，而是**退回 debug 密钥签名** —— 产物照样能装，只是不能上架、
-且以后换成正式密钥时必须先卸载再装。要出正式包就在 `android/keystore.properties` 里写：
+且以后换成正式密钥时必须先卸载再装。要换钥匙就在 `android/keystore.properties` 里写：
 
 ```properties
 storeFile=keystore/birdreport.jks
@@ -148,8 +150,12 @@ keyAlias=birdreport
 keyPassword=…
 ```
 
-CI 上则改用 4 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
-`ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`），没配就自动走 debug 签名。
+CI 上也可以用 4 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
+`ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`）**覆盖**仓库里的钥匙——配了 Secrets 就优先用 Secrets；
+都不配就走仓库里的 `android/keystore.properties`（再没有才退回 debug 密钥）。
+
+> ⚠ **上面「随库提交」的前提是仓库为私有**。一旦打算转公开：先从全部分支与历史里移除这两个文件、
+> 换一把新钥匙（已装机用户需卸载重装），再公开。
 
 ## 功能
 
