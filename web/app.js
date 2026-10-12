@@ -604,7 +604,9 @@ function renderHot(data) {
       // 上游 AI 半自动标疑的「疑问数据」：站点用红色中文名标出，这里保持一致
       const doubtBadge = x.doubt ? `<span class="badge doubt" title="上游 AI 标疑：该时段本地区有 ${fmt(x.doubtCount)} 条记录被标记为疑问数据">疑问 ${fmt(x.doubtCount)}</span>` : '';
       const nameCls = x.doubt ? ' class="cn is-doubt"' : ' class="cn"';
-      return `<div class="hot-card${x.doubt ? ' is-doubt' : ''}">
+      // 卡片可点：点了弹出该鸟种的公开报告明细（点击时才查询，不预取）。
+      // role/tabindex 与概览卡保持一致，键盘 Enter / 空格同样可用。
+      return `<div class="hot-card is-clickable${x.doubt ? ' is-doubt' : ''}" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}" role="button" tabindex="0" aria-label="查看「${esc(x.name)}」出现在哪些公开报告">
         <div class="hc-head">
           <span class="rank${rankCls}">${x.rank}</span>
           <span${nameCls}>${esc(x.name)}</span>
@@ -876,6 +878,8 @@ const METRICS = {
   record: { kind: 'taxon', title: '鸟种记录条数 · 鸟种明细' },
   report: { kind: 'report', title: '观鸟报告数 · 报告明细' },
   open: { kind: 'report', title: '公开报告 · 报告明细' },
+  // 点榜单卡片进来的：按单个鸟种收窄的报告明细。标题由调用方用 opts.title 覆盖成鸟种名。
+  taxonReports: { kind: 'report', title: '报告明细' },
 };
 
 const detail = {
@@ -1021,10 +1025,18 @@ function detailSubText() {
     // 上游只给公开报告，且单页最多 50 份，所以「上游总数」与「本页条数」都要说清楚
     const ov = state.overview || {};
     const total = m.total ?? detail.rows.length;
-    const priv = detail.metric === 'open' ? 0 : Math.max(0, (ov.reportNum ?? total) - (ov.openReportNum ?? total));
-    parts.push(`上游共 <strong>${fmt(total)}</strong> 份公开报告，本页 <strong>${fmt(detail.rows.length)}</strong> 份`);
-    if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`上游单页上限 ${DETAIL_REPORT_PAGE_SIZE} 份，用下方按钮翻页`);
-    if (priv) parts.push(`<span class="warn">另有 ${fmt(priv)} 份未公开，上游不提供明细</span>`);
+    if (detail.metric === 'taxonReports') {
+      // 按单个鸟种收窄时**不能**套用概览的 reportNum / openReportNum —— 那是整个地区的
+      // 数字，减出来的「未公开份数」跟这一种鸟对不上，会给出一个误导性的值。所以这里
+      // 只报这一种鸟的公开报告数，不提「未公开」。
+      parts.push(`本时段有 <strong>${fmt(total)}</strong> 份公开报告，本页 <strong>${fmt(detail.rows.length)}</strong> 份`);
+      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`上游单页上限 ${DETAIL_REPORT_PAGE_SIZE} 份，用下方按钮翻页`);
+    } else {
+      const priv = detail.metric === 'open' ? 0 : Math.max(0, (ov.reportNum ?? total) - (ov.openReportNum ?? total));
+      parts.push(`上游共 <strong>${fmt(total)}</strong> 份公开报告，本页 <strong>${fmt(detail.rows.length)}</strong> 份`);
+      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`上游单页上限 ${DETAIL_REPORT_PAGE_SIZE} 份，用下方按钮翻页`);
+      if (priv) parts.push(`<span class="warn">另有 ${fmt(priv)} 份未公开，上游不提供明细</span>`);
+    }
   }
   $('detailSub').innerHTML = parts.join(' · ');
 }
@@ -1043,11 +1055,22 @@ function taxonRow(x, no) {
   </tr>`;
 }
 
-function reportRow(x, no) {
+function reportRow(x, no, compact = false) {
   const span = x.startTime && x.endTime ? `${x.startTime.slice(5, 16)} ~ ${x.endTime.slice(11, 16)}` : '';
   const link = x.url
     ? `<a class="rep-link" href="${esc(x.url)}" target="_blank" rel="noreferrer noopener" title="打开上游报告详情">${esc(x.serialId || '查看报告')} ↗</a>`
     : esc(x.serialId || '—');
+  // 按单个鸟种收窄时只留「发现点 / 发现人 / 时间」：一份报告里往往有几十种鸟，
+  // 「区县」和「鸟种数」在这个语境下不说明任何问题，反而把表撑宽。
+  if (compact) {
+    return `<tr class="is-jump" data-url="${esc(x.url || '')}">
+      <td class="ta-c num">${no}</td>
+      <td class="d-name">${esc(x.pointName || '—')}</td>
+      <td>${esc(x.username || '—')}</td>
+      <td class="d-dim">${esc(span)}</td>
+      <td class="d-dim mono">${link}</td>
+    </tr>`;
+  }
   return `<tr class="is-jump" data-url="${esc(x.url || '')}">
     <td class="ta-c num">${no}</td>
     <td class="d-name">${esc(x.pointName || '—')}</td>
@@ -1090,9 +1113,15 @@ function renderDetail() {
       <tbody>${rows.map((x, i) => taxonRow(x, offset + i + 1)).join('')}</tbody>
     </table>`;
   } else {
+    // 点鸟种卡片进来的那个弹层用精简列（发现点 / 发现人 / 时间）
+    const compact = detail.metric === 'taxonReports';
     $('detailBody').innerHTML = `<table class="dtable">
-      <thead><tr><th class="ta-c">#</th><th>观鸟点</th><th>区县</th><th>观测时段</th><th class="ta-r">鸟种数</th><th>记录人</th><th>报告编号</th></tr></thead>
-      <tbody>${rows.map((x, i) => reportRow(x, offset + i + 1)).join('')}</tbody>
+      <thead><tr>${
+        compact
+          ? '<th class="ta-c">#</th><th>发现点</th><th>发现人</th><th>时间</th><th>报告</th>'
+          : '<th class="ta-c">#</th><th>观鸟点</th><th>区县</th><th>观测时段</th><th class="ta-r">鸟种数</th><th>记录人</th><th>报告编号</th>'
+      }</tr></thead>
+      <tbody>${rows.map((x, i) => reportRow(x, offset + i + 1, compact)).join('')}</tbody>
     </table>`;
   }
   $('detailBody').scrollTop = 0;
@@ -1227,6 +1256,27 @@ function bind() {
     if (card) {
       e.preventDefault();
       openDetail(card.dataset.metric);
+    }
+  });
+  // ---- 榜单卡片：点鸟种看它出现在哪些公开报告 ----
+  // 点击时才向上游查询（懒加载，不预取）。openDetail 会把 opts.where 与 currentWhere()
+  // 合并，所以自动带上当前页面的地区与日期；并「打开瞬间定格」，之后改页面条件不影响它。
+  const openTaxonReports = (card) => {
+    if (!card) return;
+    openDetail('taxonReports', {
+      title: `${card.dataset.taxonName} · 报告明细`,
+      where: { taxonid: card.dataset.taxonId },
+    });
+  };
+  $('hotList').addEventListener('click', (e) => {
+    openTaxonReports(e.target.closest('.hot-card[data-taxon-id]'));
+  });
+  $('hotList').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('.hot-card[data-taxon-id]');
+    if (card) {
+      e.preventDefault();
+      openTaxonReports(card);
     }
   });
   $('detailClose').addEventListener('click', closeDetail);

@@ -189,7 +189,7 @@ input[type="search"] { min-width: 200px; }
 @media (max-width: 720px) { .hot-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .hot-list > .notice { grid-column: 1 / -1; }
 
-/* 卡片只做展示，不再可点（点了不再弹出关联报告） */
+/* 卡片可点：点了弹出该鸟种的公开报告明细，样式见下方 .hot-card.is-clickable */
 .hot-card {
   position: relative; display: flex; flex-direction: column; gap: 3px;
   padding: 10px 12px 11px; border: 1px solid var(--border); border-radius: 10px;
@@ -197,6 +197,10 @@ input[type="search"] { min-width: 200px; }
   transition: border-color .15s;
 }
 .hot-card:hover { border-color: var(--border-strong); }
+/* 可点的卡片（点了弹出该鸟种的公开报告明细）；风格与 .stat-card.is-clickable 一致 */
+.hot-card.is-clickable { cursor: pointer; }
+.hot-card.is-clickable:hover { border-color: var(--primary); box-shadow: 0 6px 18px rgba(47, 127, 214, .16); }
+.hot-card.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .hc-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .hc-head .cn { font-size: 13.5px; font-weight: 620; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hc-latin { font-size: 11px; color: var(--muted); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
