@@ -236,17 +236,21 @@ const soft = (p, fallback) =>
 const STAT_TIMEOUT_MS = Number(process.env.STAT_TIMEOUT_MS || 15000);
 
 /** 限时取值：超时返回兜底值（被放弃的请求由 soft 兜住，不会产生未处理拒绝） */
-const within = (p, fallback, ms = STAT_TIMEOUT_MS) =>
-  Promise.race([
-    p,
-    new Promise((resolve) => {
-      const t = setTimeout(() => {
-        console.warn('[api] 辅助统计超过 ' + ms + 'ms 未返回，先用兜底值渲染');
-        resolve(fallback);
-      }, ms);
-      if (t.unref) t.unref();
-    }),
-  ]);
+const within = (p, fallback, ms = STAT_TIMEOUT_MS) => {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      console.warn('[api] 辅助统计超过 ' + ms + 'ms 未返回，先用兜底值渲染');
+      resolve(fallback);
+    }, ms);
+    if (timer.unref) timer.unref();
+  });
+  // 必须在 race 结束时清掉定时器：否则即使 p 早已正常返回、页面拿到的就是真实值，
+  // 这个定时器 15 秒后照样会触发并打出一条**假的「超时」警告**。
+  // （实测：冷启动时 3 个统计接口 3 秒就返回了真实值，看板数字完全正确，
+  //  控制台却出现 3 条超时警告。unref() 只是不阻止进程退出，并不取消定时器。）
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+};
 
 /** 降级（有子接口没取到）的概览结果只缓存这么久，稍后自动重试 */
 const DEGRADED_TTL_MS = Number(process.env.DEGRADED_TTL_MS || 60 * 1000);
