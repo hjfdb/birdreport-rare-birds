@@ -255,6 +255,98 @@ input[type="search"] { min-width: 200px; }
 .dtable .d-name.is-doubt { color: #cf2020; }
 .dtable td.is-doubt { color: #cf2020; font-weight: 620; }
 
+/* ---------------- 「未加新」（绑定用户的人生鸟种里没有这一种） ----------------
+   用青绿（teal）而不是红：红色已经被「疑问数据」占用，两者语义完全不同，
+   同一张卡上可能同时出现。绿色（--green）也已被统计卡占用，所以单独定义一个色。
+
+   ▸ 强调色的优先级：疑问（红）> 未加新（青）> 默认
+     一张卡可能同时是「疑问」和「未加新」，外框只能有一个颜色。
+     这里用 :not(.is-doubt) 把顺序写进选择器本身 —— 不依赖样式表的先后，
+     以后谁把这段挪个位置也不会把优先级弄反。
+     选红的理由：疑问是上游对**记录本身**的质疑，信息更硬；未加新只是「相对某个人」的状态。
+   ▸ 左缘竖条是「未加新」的专用通道，不参与这个优先级（它跟徽章一起说明「未加新」，
+     即便外框已经变红也仍然保留，两个信息各走各的渠道，不互相顶掉）。 */
+:root { --lifer: #0d7f8a; --lifer-soft: #e6f5f6; }
+.badge.lifer { background: var(--lifer-soft); color: #0a6570; border-color: #b6e0e3; }
+.hot-card.is-lifer:not(.is-doubt) { border-color: #bfe0e3; }
+.hot-card.is-lifer:not(.is-doubt):hover { border-color: #8fcdd3; }
+.hc-head .cn.is-lifer:not(.is-doubt) { color: #0a6570; }
+/* 卡片左缘一条青色竖条：扫一眼就能看出「这张是未加新」，不必逐字读徽章 */
+.hot-card.is-lifer::before {
+  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--lifer); opacity: .75;
+}
+.list-foot .lifer-foot { color: #0a6570; display: inline-flex; align-items: center; gap: 5px; }
+.lifer-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lifer); display: inline-block; flex: none; }
+.modal-sub .lifer-foot { color: #0a6570; display: inline-flex; align-items: center; gap: 5px; }
+.modal-sub .lifer-error { color: #b3261e; }
+.dtable .d-name.is-lifer:not(.is-doubt) { color: #0a6570; }
+
+/* ---------------- 顶栏右上角「我的」入口 ---------------- */
+.topbar-side { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.my-entry {
+  display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 8px;
+  border: 1px solid var(--border-strong); border-radius: 20px; background: var(--surface);
+  font-family: inherit; font-size: 12.5px; color: var(--text); cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, background .15s; text-align: left;
+}
+.my-entry:hover { border-color: var(--lifer); box-shadow: 0 2px 10px rgba(13, 127, 138, .14); }
+.my-entry:focus-visible { outline: 2px solid var(--lifer); outline-offset: 2px; }
+.my-entry.is-bound { border-color: #b6e0e3; background: var(--lifer-soft); }
+.me-icon { font-size: 16px; line-height: 1; flex: none; }
+.me-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.me-label { font-weight: 620; }
+.me-sub { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.my-entry.is-bound .me-sub { color: #0a6570; }
+.me-count {
+  flex: none; min-width: 20px; padding: 0 6px; height: 19px; line-height: 19px; text-align: center;
+  border-radius: 10px; background: var(--lifer); color: #fff; font-size: 11px; font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- 「我的」面板 ---------------- */
+.modal-my { width: min(620px, 100%); }
+.my-body { padding-bottom: 18px; }
+.my-intro { margin: 0 0 10px; font-size: 12.5px; color: var(--text-2); line-height: 1.75; }
+.my-intro strong { color: var(--text); }
+.my-intro code {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+}
+.my-note { color: var(--muted); }
+.my-form { margin-top: 14px; }
+.my-form label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.my-form-row { display: flex; gap: 8px; }
+.my-form-row input { flex: 1; min-width: 0; }
+.my-msg { margin: 10px 0 0; font-size: 12.5px; line-height: 1.7; color: #b3261e; }
+.my-msg[hidden] { display: none; }
+.my-msg.warn { color: #9a6a10; }
+
+.my-bound { margin-top: 6px; }
+.my-h4 { margin: 16px 0 8px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.my-user {
+  display: flex; align-items: center; gap: 10px; padding: 11px 13px;
+  border: 1px solid #b6e0e3; border-radius: 10px; background: var(--lifer-soft);
+}
+.my-avatar { font-size: 22px; line-height: 1; flex: none; }
+.mu-info { flex: 1; min-width: 0; }
+.mu-name { font-size: 15px; font-weight: 640; color: #0a6570; word-break: break-all; }
+.mu-sub { font-size: 11.5px; color: var(--text-2); }
+.my-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.my-cell {
+  border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; background: var(--surface-2);
+}
+.my-cell .mk { font-size: 11.5px; color: var(--muted); }
+.my-cell .mv { font-size: 19px; font-weight: 660; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.my-cell .mv small { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+.my-cell.is-new .mv { color: var(--lifer); }
+.my-cell.is-known .mv { color: var(--green); }
+.my-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.my-bar-track { flex: 1; height: 8px; background: #eff2f7; border-radius: 5px; overflow: hidden; }
+.my-bar-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, #2f9e5f, #4bbd80); }
+.my-bar-text { font-size: 12px; color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.my-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; margin-bottom: 16px; }
+
 .bar-track { width: 100%; height: 7px; background: #eff2f7; border-radius: 4px; overflow: hidden; }
 .bar-fill {
   height: 100%; border-radius: 4px;
@@ -324,12 +416,28 @@ input[type="search"] { min-width: 200px; }
 
 .modal-mask {
   position: fixed; inset: 0; z-index: 60; background: rgba(15, 23, 42, .42);
-  display: flex; align-items: center; justify-content: center; padding: 24px;
+  display: flex; overflow: auto; padding: 24px;
+  /* 高度跟着 --vvh 走 —— app.js 把 visualViewport 量到的「实际可视高度」实时写进
+     这个变量（见 app.js 的 trackViewportHeight）。手机浏览器的地址栏 / 底部工具条
+     会伸缩，而 CSS 的 vh 按「工具条收起」时算：只认 vh 的话，遮罩比可视区高，
+     居中的弹层会被往下顶，下半截（正是「上一页 / 下一页」那一条）落到屏幕外。
+     变量取不到时退回 100vh；这也不行的话高度会退化成拉伸，配合 overflow
+     仍然滚得到底部。 */
+  height: 100vh;
+  height: var(--vvh, 100vh);
 }
 .modal-mask[hidden] { display: none; }
 .modal {
   background: var(--surface); border-radius: 14px; width: min(1080px, 100%);
-  max-height: min(88vh, 920px); display: flex; flex-direction: column; overflow: hidden;
+  /* 高度上限同时看三样：观感（88vh）、超宽屏上限（920px）、实际可视高度
+     （--vvh 减两侧留白，留白值与 .modal-mask 的 padding 一致）。
+     居中不用 align-items / justify-content，而是靠下面的 margin:auto ——
+     万一弹层比遮罩还高，自动外边距会归零、弹层回到顶部，遮罩自己滚动仍能够到
+     底部（居中 + overflow 的组合会把顶部永远裁掉，够不回来）。 */
+  max-height: 88vh;
+  max-height: min(88vh, 920px, calc(var(--vvh, 100vh) - 48px));
+  display: flex; flex-direction: column; overflow: hidden;
+  margin: auto; flex: none;
   box-shadow: 0 24px 64px rgba(15, 23, 42, .26);
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 8px; }
@@ -345,11 +453,34 @@ input[type="search"] { min-width: 200px; }
 .detail-tools { padding: 0 20px 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .modal-body { flex: 1; overflow: auto; padding: 0 20px; }
 .modal-foot {
+  /* flex:none：翻页条是弹层里唯一的翻页入口，长表格争高度时不能被压掉 */
+  flex: none;
   padding: 12px 20px 16px; display: flex; align-items: center; justify-content: space-between;
   gap: 12px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted);
 }
 .pager-btns { display: flex; gap: 8px; }
 .detail-loading { padding: 52px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+
+/* ---------------- 弹层：窄屏或矮屏下的紧凑排版 ----------------
+   矮屏主要是横屏手机（宽度超过 720px、高度只有三四百像素）：24px 的遮罩留白
+   与大号标题会把正文区压得没剩几行。这里把留白收紧、高度顶满可视区
+   （--vvh 机制见上面 .modal-mask / .modal 的注释），底部翻页条始终完整可见、
+   按得到（按钮加高到 34px，手指够得着；桌面版的 26px 是给鼠标的）。 */
+@media (max-width: 720px), (max-height: 620px) {
+  .modal-mask { padding: 8px; }
+  .modal { border-radius: 12px; max-height: 94vh; max-height: calc(var(--vvh, 100vh) - 16px); }
+  .modal-head { padding: 13px 14px 6px; }
+  .modal-head h3 { font-size: 15px; }
+  .modal-sub { padding: 0 14px 8px; font-size: 12px; gap: 6px; }
+  .detail-tools { padding: 0 14px 8px; }
+  /* flex 子项的 min-height 默认是 auto（不小于内容高度），不显式归零的话
+     长表格会把 .modal-body 撑破弹层，底部的翻页条就被挤出可视区 —— 归零它才会自己滚 */
+  .modal-body { padding: 0 14px; overflow-x: auto; min-height: 0; }
+  /* 翻页条允许换行：页码文字与按钮排不下时按钮换到第二行，而不是被挤出屏幕 */
+  .modal-foot { padding: 9px 14px 11px; font-size: 12px; flex-wrap: wrap; gap: 8px; }
+  .pager-btns { flex: 1 1 auto; justify-content: flex-end; }
+  .pager-btns .btn { min-height: 34px; padding: 0 16px; }
+}
 
 .dtable { width: 100%; border-collapse: collapse; font-size: 13px; }
 .dtable th {
@@ -379,15 +510,30 @@ input[type="search"] { min-width: 200px; }
    溢出；榜单的 156 张卡片又占了整页高度的大头。这里统一收敛为纵向堆叠，并隐去卡片上的
    次要信息。本块只动样式，不改 HTML / JS。 */
 @media (max-width: 720px) {
-  /* 顶栏：原来是固定 68px 高，副标题在窄屏折成 3 行会把它撑破 —— 而顶栏是 sticky 的，
-     一旦错位会一直跟着滚动。改成自适应高度 + 纵向堆叠。 */
+  /* 顶栏：原来是固定 68px 高，副标题在窄屏折行会把它撑破 —— 而顶栏是 sticky 的，
+     一旦错位会一直跟着滚动。改成自适应高度。
+     ▸ 第一行：品牌名（左） + 「我的」入口（右）—— 「我的」是入口按钮，位置要跟桌面版一致
+       （都在右上角），不能用「先品牌、再一整行控件」的纵向堆叠把它挤到第二行。
+       按钮在窄屏只留一行：两行文案（我的 / 已绑定 xxx）再叠上计数徽章太占地方，
+       绑定状态交给底色（青色 = 已绑定）和徽章表达。
+     ▸ 第二行：连接状态独占一条、左对齐贴在最下 —— 之前它挂在「我的」正下方并右对齐，
+       和按钮挤成一小坨贴在屏幕右缘，很难看。 */
   .topbar-inner {
     height: auto; min-height: 54px; padding: 9px 0;
-    flex-direction: column; align-items: flex-start; gap: 5px;
+    flex-direction: row; flex-wrap: wrap; align-items: center;
+    justify-content: space-between; gap: 6px 10px;
   }
+  .brand { flex: 0 1 auto; min-width: 0; }
+  .brand-mark { font-size: 22px; }
+  /* 标题最多一行：宁可截断，也不要它换行把「我的」顶到下面去 */
+  .brand h1 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* 副标题窄屏下要占约 45px 且常驻吸顶，直接省掉（页脚有同源说明） */
   .brand-sub { display: none; }
-  .topbar-meta { white-space: normal; font-size: 12px; }
+  /* display:contents 把这一列在窄屏「拆掉」：按钮留在标题行右端，
+     连接状态换行独占一条（flex: 1 1 100%）并左对齐。 */
+  .topbar-side { display: contents; }
+  /* 状态行稍作左缩进，别贴着屏幕最左边（与品牌图标完全齐平时看着像贴边了） */
+  .topbar-meta { flex: 1 1 100%; white-space: nowrap; font-size: 11.5px; margin-left: 10px; }
 
   /* 保护等级构成：手机上不显示。该块数据随榜单一起下发、不额外发请求，
      所以纯 CSS 隐藏没有代价（与侧栏图表不同，那个会触发趋势接口）。 */
@@ -414,35 +560,81 @@ input[type="search"] { min-width: 200px; }
   .panel-tools #selSort { flex: 1.7 1 0; min-width: 0; }
   .panel-tools .btn { flex: 1 1 100%; }
 
-  /* 卡片瘦身：隐去学名 / 目科 / 本时段明细 / 稀有度条，只保留排名、中文名、
-     保护徽章与历史记录数（该地区历史全时段记录数，即榜单的排序依据）。
+  /* 卡片瘦身：隐去学名 / 目科 / 稀有度条，只保留排名、中文名、保护徽章、
+     历史记录数与「本时段 正常 n 条 · 疑问 n 条」。
      仍是两张一行，但卡片高度大约减半，整页长度随之大幅缩短。 */
   .hot-card { padding: 8px 10px 9px; gap: 2px; }
-  .hc-latin, .hc-sub, .hc-hist, .hc-bar { display: none; }
+  /* hc-hist（本时段正常/疑问）保留：这是点开卡片前唯一能看出「有几条被标疑」的地方，
+     而且用户明确要求卡片上要显示这两个数。hc-latin（学名）/ hc-sub（目科）这些才是纯装饰。 */
+  .hc-latin, .hc-sub, .hc-bar { display: none; }
+  .hc-hist { font-size: 10.5px; line-height: 1.5; }
   .hc-foot { padding-top: 4px; }
 
   /* 概览卡共 5 张：固定两列，并把末尾落单的那张铺满整行，避免留半格空位 */
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .stat-grid > :nth-child(odd):last-child { grid-column: 1 / -1; }
 
-  /* 明细弹窗：两侧留白收紧；表格列多时允许内容区横向滚动，不至于撑破弹窗 */
-  .modal-mask { padding: 10px; }
-  .modal { max-height: 94vh; }
-  .modal-body { overflow-x: auto; }
+  /* 明细弹层的紧凑排版与可见性（--vvh 机制）统一在上面的
+     @media (max-width: 720px), (max-height: 620px) 块里处理，这里只管窄屏专属项：
+     搜索框与排序各占整行（并排放不下）、`.modal-body` 的横向滚动作为兜底
+     （两个表都已改成堆叠排版，正常不该再出现横向滚动条）。 */
+  .detail-tools #dSearch { flex: 1 1 100%; min-width: 0; }
+  .detail-tools #dSort { flex: 1 1 100%; min-width: 0; }
 
-  /* 报告明细在窄屏改成上下两行：发现点 / 观鸟点独占第一行，其余信息在第二行自动换行。
-     窄屏**不能**沿用表格排版：时间、报告等列设了 nowrap，在自动布局里会优先占满自己的
-     完整宽度，把唯一可换行的「发现点」挤到只剩一个字宽 —— 实测「奥林匹克森林公园（奥森）
-     南园-洼里湖」被折成 9 行、还把报告列顶出了屏幕。改成 flex 堆叠后不再需要横向滚动。 */
+  /* ---- 明细表在窄屏统一改成「卡片式」堆叠 ----
+     两个表（鸟种明细 / 报告明细）列数都远超手机宽度：不做处理只能横向滚动，
+     而横向滚动的表格在手机上等于「看不到右边那几列」。
+     改成：第一列（名称类）独占整行，其余字段折行排开，用 ::before 把列名补回
+     每个数字前面 —— 否则一列光秃秃的「12」没人知道是历史记录还是疑问条数。
+     data-label 写在 JS 的单元格上，桌面上不生效（::before 只在媒体查询里生成）。 */
+  .dtable:not(.dtable-report),
   .dtable-report { display: block; }
-  .dtable-report thead { display: none; } /* 两行式排版里表头没有意义 */
+  .dtable:not(.dtable-report) thead,
+  .dtable-report thead { display: none; } /* 堆叠排版里表头已经没有意义 */
+  .dtable:not(.dtable-report) tbody,
   .dtable-report tbody { display: block; }
+  .dtable:not(.dtable-report) tbody tr,
   .dtable-report tbody tr {
     display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px;
     padding: 10px 4px; border-bottom: 1px solid var(--border);
   }
+  .dtable:not(.dtable-report) td,
   .dtable-report td { display: block; padding: 0; border: 0; }
+  .dtable:not(.dtable-report) td:first-child,
   .dtable-report td:first-child { display: none; } /* 序号，窄屏没多大必要 */
+  /* 名称那一列（鸟种名 / 观鸟点）独占第一行 */
+  .dtable:not(.dtable-report) td:nth-child(2),
   .dtable-report td:nth-child(2) { flex: 1 1 100%; font-size: 13.5px; }
+  .dtable:not(.dtable-report) td:nth-child(n + 3),
   .dtable-report td:nth-child(n + 3) { font-size: 12px; color: var(--text-2); }
+  /* 窄屏上日期 / 区县 / 观鸟点这类「整段值」允许折行。
+     桌面版给 `.dtable .d-dim` 设了 nowrap（防止列被压扁），在堆叠排版里只会把行顶出屏幕。
+     选择器要带上 td 才能盖过原来的 `.dtable .d-dim`（两个类 vs 两个类加元素）。 */
+  .dtable td.d-dim { white-space: normal; }
+  /* 列名：只在窄屏出现，替回被收掉的表头 */
+  .dtable td[data-label]::before {
+    content: attr(data-label) ' '; color: var(--muted); font-weight: 400;
+  }
+  /* 目 · 科 与 保护等级 各占整行，避免跟数字挤在一行里换行错位 */
+  .dtable:not(.dtable-report) td:nth-child(3),
+  .dtable:not(.dtable-report) td:nth-child(7) { flex: 1 1 100%; }
+  /* 保护等级列是徽章组，跟在数字后面会显得零散，单独起一行并去掉上边距 */
+  .dtable:not(.dtable-report) td:nth-child(7) .badges { margin-top: 0; }
+
+  /* 顶栏右上角「我的」的尺寸微调（位置规则见上面顶栏那一段）。
+     副行（已绑定 xxx / 绑定记录中心用户名）在窄屏不显示：按钮保持一行才不臃肿，
+     绑定状态看底色与计数徽章；完整信息在「我的」面板里。 */
+  .my-entry { padding: 4px 11px 4px 7px; gap: 7px; }
+  .me-icon { font-size: 15px; }
+  .me-sub { display: none; }
+
+  /* 「我的」面板：手机上输入框与按钮上下排（并排时输入框只剩几个字符宽），
+     数字格子固定两列，两个操作按钮各占整行、更好点 */
+  .modal-my { width: 100%; }
+  .my-body { padding: 12px 14px 16px; }
+  .my-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .my-form-row { flex-direction: column; }
+  .my-form-row .btn { width: 100%; }
+  .my-actions { gap: 6px; }
+  .my-actions .btn { flex: 1 1 100%; }
 }

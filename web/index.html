@@ -20,9 +20,20 @@
           <p class="brand-sub">按省 / 市 / 区县，把本地记录最少的鸟种排在最前 · 附国家重点保护等级</p>
         </div>
       </div>
-      <div class="topbar-meta">
-        <span class="dot" id="statusDot"></span>
-        <span id="statusText">正在连接服务…</span>
+
+      <!-- 右上角「我的」：点开是一个面板，在里面绑定观鸟记录中心的用户名 -->
+      <div class="topbar-side">
+        <button class="my-entry" id="btnMy" aria-haspopup="dialog" aria-controls="myModal">
+          <span class="me-text">
+            <span class="me-label">我的</span>
+            <span class="me-sub" id="myEntrySub">绑定记录中心用户名</span>
+          </span>
+          <span class="me-count" id="myEntryCount" hidden></span>
+        </button>
+        <div class="topbar-meta">
+          <span class="dot" id="statusDot"></span>
+          <span id="statusText">正在连接服务…</span>
+        </div>
       </div>
     </div>
   </header>
@@ -67,7 +78,7 @@
         </div>
         <div class="field field-inline">
           <label for="inpUser">用户名称</label>
-          <input type="text" id="inpUser" list="dlUser" placeholder="记录人，如：Zacco" autocomplete="off" />
+          <input type="text" id="inpUser" list="dlUser" placeholder="记录人，如：kkia" autocomplete="off" />
           <datalist id="dlUser"></datalist>
         </div>
         <div class="field field-inline">
@@ -103,6 +114,7 @@
             <input type="search" id="inpFilter" placeholder="在本榜单内筛选鸟种名 / 学名" />
             <select id="selFilter" class="mini-select">
               <option value="all">全部鸟种</option>
+              <option value="lifer">仅未加新（绑定用户未见）</option>
               <option value="protected">仅受保护（国一/国二/三有）</option>
               <option value="national">仅国家重点保护（国一/国二）</option>
               <option value="chinaEndemic">仅中国特有</option>
@@ -162,9 +174,10 @@
         保护等级来自《国家重点保护野生动物名录》(2021)、《有重要生态、科学、社会价值的陆生野生动物名录》、IUCN 红色名录与中国生物多样性红色名录。
       </p>
       <p>
-      缓存策略：榜单（本时段鸟种清单）、「历史稀有度」（该地区不加时间范围的记录数）与「疑问数据」标记各存一份，都缓存 <strong>24 小时</strong>，一天失效一次；
-      概览与趋势等统计缓存 <strong>10 分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code id="cacheBackend">data/api-cache.json</code>，服务重启后自动读入内存继续复用。
-      同一地区只向上游取一次，切换筛选 / 排序 / 翻页直接复用缓存。需要最新数据时点「刷新数据」。
+        缓存策略：榜单（本时段鸟种清单）、「历史稀有度」（该地区不加时间范围的记录数）与「疑问数据」标记各存一份，都缓存 <strong>24 小时</strong>，一天失效一次；
+        概览与趋势等统计缓存 <strong>10 分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code
+          id="cacheBackend">data/api-cache.json</code>，服务重启后自动读入内存继续复用。
+        同一地区只向上游取一次，切换筛选 / 排序 / 翻页直接复用缓存。需要最新数据时点「刷新数据」。
       </p>
       <p class="foot-note">
         <strong>关于红色标记</strong>：榜单与明细里标红的鸟种，表示该时段在该地区有记录被上游
@@ -172,6 +185,13 @@
         每张卡片「本时段 N 条」后面会把它拆成 <code>正常 n 条 · 疑问 n 条</code>，徽章中的数字为被标疑的记录条数。
         该标记来自上游 <code>record/activity/taxon</code> 的 <code>outside_type=1</code> 查询，
         与不传该参数时的总数逐种核对完全吻合（正常 + 疑问 = 全部），仅作提示，不代表鸟种识别一定错误。
+      </p>
+      <p class="foot-note">
+        <strong>关于「未加新」标记</strong>：右上角绑定一个观鸟记录中心的用户名后，本页会取回
+        TA <strong>有史以来的全部鸟种记录</strong>（人生鸟种），榜单里 <strong>不在</strong> 这份名单中的鸟种即标为
+        <code>未加新</code> —— 也就是对 TA 来说「还没见过、有机会加新」的鸟。标记只影响展示与筛选，
+        不参与稀有度排序；绑定状态记在网址与浏览器本地，刷新后仍在。
+        该名单一天更新一次（与榜单同节奏）。
       </p>
       <p class="foot-note">本页仅做数据汇总展示，请遵守数据来源方的使用条款，合理控制请求频率。</p>
     </footer>
@@ -203,6 +223,64 @@
         <div class="pager-btns">
           <button class="btn btn-mini" id="dPrev">上一页</button>
           <button class="btn btn-mini" id="dNext">下一页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 「我的」：绑定观鸟记录中心的用户名，与 TA 的人生鸟种比对出「未加新」 -->
+  <div id="myModal" class="modal-mask" hidden>
+    <div class="modal modal-my" role="dialog" aria-modal="true" aria-labelledby="myTitle">
+      <div class="modal-head">
+        <h3 id="myTitle">我的 · 加新比对</h3>
+        <button class="modal-close" id="myClose" aria-label="关闭" title="关闭（Esc）">×</button>
+      </div>
+      <div class="modal-body my-body">
+        <p class="my-intro">
+          输入你在 <a href="https://www.birdreport.cn/" target="_blank" rel="noreferrer">中国观鸟记录中心</a>
+          的<strong>用户名</strong>（只填用户名就行），本页会取回你<strong>有史以来的全部鸟种记录</strong>，
+          再与本地稀有鸟种排行逐种比对，把<strong>你还没加新</strong>的鸟标出来、并支持一键筛出。
+        </p>
+
+        <!-- 未绑定：只要求填用户名 -->
+        <div class="my-form" id="myForm">
+          <label for="inpLifer">记录中心用户名</label>
+          <div class="my-form-row">
+            <input type="text" id="inpLifer" value="kkia" placeholder="例如 kkia" autocomplete="off" spellcheck="false"
+              enterkeyhint="go" />
+            <button class="btn btn-primary" id="btnLiferBind">绑定</button>
+          </div>
+          <p class="my-msg" id="myMsg" hidden></p>
+        </div>
+
+        <!-- 已绑定 -->
+        <div class="my-bound" id="myBound" hidden>
+          <div class="my-user">
+            <span class="my-avatar" aria-hidden="true">🐦</span>
+            <div class="mu-info">
+              <div class="mu-name" id="myUserName"></div>
+              <div class="mu-sub" id="myUserSub"></div>
+            </div>
+            <button class="btn btn-mini" id="btnLiferUnbind">取消绑定</button>
+          </div>
+
+          <h4 class="my-h4">我目前的记录</h4>
+          <div class="my-stats" id="myStats"></div>
+
+          <h4 class="my-h4">与当前榜单的比对</h4>
+          <div class="my-stats" id="myCompared"></div>
+          <div class="my-bar">
+            <div class="my-bar-track">
+              <div class="my-bar-fill" id="myBarFill"></div>
+            </div>
+            <span class="my-bar-text" id="myBarText"></span>
+          </div>
+
+          <div class="my-actions">
+            <button class="btn btn-primary" id="btnMyShowNew">只看未加新的鸟</button>
+            <button class="btn" id="btnMyRefresh" title="忽略缓存，重新取一次我的记录">重新获取名单</button>
+          </div>
+          <p class="my-msg" id="myMsg2" hidden></p>
         </div>
       </div>
     </div>

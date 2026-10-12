@@ -31,6 +31,13 @@ const STANDALONE = !location.protocol.startsWith('http');
 /** 上一次筛选条件的本地存储键；与地址栏参数配合，实现「刷新后选择还在」 */
 const STORAGE_KEY = 'birdreport.ui.v1';
 
+/**
+ * 「我的」默认绑定的记录中心用户名。
+ * 首次打开（地址栏与本地存储里都没有）就用它预填，直接点「绑定」即可。
+ * 用户取消绑定后会记住「已解绑」这个状态，不会又被默认值拉回去。
+ */
+const DEFAULT_LIFER_USER = 'kkia';
+
 /** 侧栏三块图表（逐月鸟种数 / 逐月报告数 / 地区排行）是否启用，对应 index.html 里 #sideCols 的 hidden */
 const sideChartsVisible = () => !$('sideCols').hidden;
 
@@ -48,6 +55,12 @@ const state = {
   user: '',       // 用户名称（记录人）→ 上游 username
   taxonName: '',  // 用户填写的鸟种名称原文
   taxonId: '',    // 解析出的 taxon_id；空表示未按鸟种收窄
+  // ---- 「我的」：绑定的记录中心用户名（空 = 未绑定）----
+  // 与上面 state.user 是两件事：state.user 是「把榜单收窄到这个人的记录」，
+  // state.lifer 是「拿这个人的名单来比对谁没加新」。参数名也因此分开（username / liferUser）。
+  lifer: '',
+  liferInfo: null, // 最近一次 /api/user-lifelist 的结果，供「我的」面板展示
+  liferNocache: false, // 一次性开关：下一次查询忽略人生鸟种缓存（不影响地区榜单缓存）
   hot: null,
   trend: null,
   regionRank: null,
@@ -131,7 +144,15 @@ function currentWhere() {
   if (state.end) where.endTime = state.end;
   // 记录检索条件：上游 record/activity/* 与统计接口都认这三个参数（已实测）
   if (state.point) where.pointname = state.point;
-  if (state.user) where.username = state.user;
+  if (state.user) {
+    where.username = state.user;
+    // 上游的 mode 是**整条查询**的匹配方式（省略/0 = 模糊，1 = 精确），
+    // 它同时作用于 pointname 与 username，没法只让其中一个精确。
+    // 所以在「只填了用户名」时用精确匹配（否则查 kkia 会把名字含 kkia 的别人也算进来），
+    // 一旦同时填了观测地点就不传 mode —— 地点那栏的模糊匹配（「奥森」能命中
+    // 「奥林匹克森林公园（奥森）」）是既有功能，不能顺手改掉。
+    if (!state.point) where.mode = 1;
+  }
   if (state.taxonId) where.taxonid = state.taxonId;
   return where;
 }
@@ -195,6 +216,8 @@ function snapshot() {
     user: state.user,
     taxonName: state.taxonName,
     taxonId: state.taxonId,
+    // 空串也是有效值（表示「已解绑」），所以必须原样存，不能用 falsy 判断丢掉
+    lifer: state.lifer,
   };
 }
 
@@ -241,6 +264,8 @@ function syncUrl() {
   if (s.user) sp.set('user', s.user);
   if (s.taxonName) sp.set('taxon', s.taxonName);
   if (s.taxonId) sp.set('taxonId', s.taxonId);
+  // 绑定用户也进地址栏，分享出去的链接对方打开就是同一份比对
+  if (s.lifer) sp.set('lifer', s.lifer);
   const qs = sp.toString();
   history.replaceState(null, '', qs ? `${location.pathname}?${qs}` : location.pathname);
 }
@@ -268,6 +293,13 @@ function resolveInitial() {
   const start = allTime ? '' : pick('start') || dft.start;
   const end = allTime ? '' : pick('end') || dft.end;
 
+  // 绑定用户：URL > 本地存储 > 默认（kkia）。
+  // 这里**不能用 pick()** —— 它把空串当成「没设置」，而「空串」正是「已解绑」的有效值。
+  // 少了这一层区分，用户取消绑定后刷新又会被默认值拉回 kkia，等于解绑不了。
+  const savedHasLifer = typeof saved.lifer === 'string';
+  const urlHasLifer = sp.has('lifer');
+  const lifer = urlHasLifer ? sp.get('lifer') : savedHasLifer ? saved.lifer : DEFAULT_LIFER_USER;
+
   return {
     province: pick('province') || '北京市',
     city: pick('city'),
@@ -281,6 +313,7 @@ function resolveInitial() {
     user: pick('user'),
     taxonName: pick('taxon'),
     taxonId: pick('taxonId'),
+    lifer,
   };
 }
 
@@ -296,6 +329,24 @@ function restoreTools(init) {
   state.q = init.q || '';
   $('inpFilter').value = state.q;
   restoreRecordFilters(init);
+  restoreLifer(init);
+}
+
+/**
+ * 还原「我的」绑定。
+ * init.lifer 的**空串是有效值**（表示用户主动解绑过），不能当成「没设置」，
+ * 否则解绑后刷新又会被默认值拉回 kkia。
+ */
+function restoreLifer(init) {
+  state.lifer = typeof init.lifer === 'string' ? init.lifer : '';
+  state.liferInfo = null;
+  // 带了 filter=lifer 却没有任何绑定（比如把「仅未加新」的链接分享给没绑定的同事）：
+  // 这个筛选无从比对，回落到「全部鸟种」，免得对方看到一片空白
+  if (!state.lifer && state.filter === 'lifer') {
+    state.filter = 'all';
+    $('selFilter').value = 'all';
+  }
+  syncLiferUi();
 }
 
 /** 还原顶部「记录检索」三项：地址栏里的 taxonId 是权威值，直接沿用不再解析 */
@@ -316,6 +367,195 @@ function restoreRecordFilters(init) {
     renderFilterHint('');
   }
 }
+
+/* ---------------------------------------------------------------- *
+ * 「我的」：绑定记录中心用户名 → 与人生鸟种比对出「未加新」
+ *
+ * 与顶部「记录检索」里的「用户名称」是两件不同的事：
+ *   ▸ 记录检索的用户名（state.user → 上游 username）：把榜单**收窄**到这个人的记录
+ *   ▸ 我的（state.lifer → 上游 liferUser）：拿这个人的**全量名单**来比对，谁没加新
+ * 所以参数名、存储位置、UI 都分开，互不干扰。
+ *
+ * 名单由服务端一次请求取全（不带省份、不带时间，带 mode=1 精确匹配），缓存 24 小时。
+ * ---------------------------------------------------------------- */
+
+/** 绑定状态写进 state + localStorage + 地址栏 */
+function setLifer(name) {
+  state.lifer = name || '';
+  state.liferInfo = null;
+  // 解绑后「只看未加新」就没有意义了：把筛选项一并回落，避免筛出一个空榜单
+  if (!state.lifer && state.filter === 'lifer') state.filter = 'all';
+  $('selFilter').value = state.filter;
+  syncLiferUi();
+  persist();
+}
+
+/** 同步右上角入口、面板内容、以及筛选下拉里那一项的可用性 */
+function syncLiferUi() {
+  const bound = !!state.lifer;
+  const entry = $('btnMy');
+  entry.classList.toggle('is-bound', bound);
+  $('myEntrySub').textContent = bound ? `已绑定 ${state.lifer}` : '绑定记录中心用户名';
+
+  // 「仅未加新」在没绑定时禁用（并给出原因），否则选了会得到一份看着像「一种都没有」的空榜
+  const opt = [...$('selFilter').options].find((o) => o.value === 'lifer');
+  if (opt) {
+    opt.disabled = !bound;
+    opt.textContent = bound ? `仅未加新（${state.lifer} 未见）` : '仅未加新（需先绑定用户）';
+  }
+
+  $('myForm').hidden = bound;
+  $('myBound').hidden = !bound;
+  if (!bound) {
+    $('inpLifer').value = DEFAULT_LIFER_USER;
+    $('myEntryCount').hidden = true;
+    renderMyPanel(null);
+    return;
+  }
+  $('myUserName').textContent = state.lifer;
+  renderMyPanel(state.hot && state.hot.stat ? state.hot.stat : null);
+}
+
+/** 打开「我的」面板；已绑定时顺手把最新名单拉回来（面板里要显示「总鸟种数」） */
+async function openMy() {
+  $('myModal').hidden = false;
+  // 只把光标放进输入框（已绑定时那个框是隐藏的，别去 focus 它）
+  if (!state.lifer) $('inpLifer').focus({ preventScroll: true });
+  else await loadMyLifelist();
+}
+
+function closeMy() {
+  $('myModal').hidden = true;
+}
+
+/** 取回绑定用户的人生鸟种（面板里的「我目前的记录」就是它） */
+async function loadMyLifelist(nocache = false) {
+  if (!state.lifer) return;
+  showMyMsg('');
+  try {
+    const r = await API('user-lifelist', { user: state.lifer, ...(nocache ? { nocache: '1' } : {}) });
+    if (r.error) {
+      state.liferInfo = null;
+      showMyMsg(r.error);
+    } else {
+      state.liferInfo = r;
+      showMyMsg('');
+    }
+  } catch (e) {
+    state.liferInfo = null;
+    showMyMsg('读取名单失败：' + e.message);
+  }
+  renderMyPanel(state.hot && state.hot.stat ? state.hot.stat : null);
+}
+
+let myMsgTimer = null;
+function showMyMsg(text) {
+  clearTimeout(myMsgTimer);
+  for (const id of ['myMsg', 'myMsg2']) {
+    const el = $(id);
+    el.hidden = !text;
+    el.textContent = text || '';
+  }
+  // 绑定失败类的提示看几秒就淡出；「重新获取」的提示也一样
+  if (text) myMsgTimer = setTimeout(() => { $('myMsg').hidden = true; $('myMsg2').hidden = true; }, 6000);
+}
+
+const myCell = (k, v, unit, cls) =>
+  `<div class="my-cell${cls ? ' ' + cls : ''}"><div class="mk">${esc(k)}</div>` +
+  `<div class="mv">${fmt(v)}${unit ? `<small>${esc(unit)}</small>` : ''}</div></div>`;
+
+/**
+ * 渲染「我的」面板。
+ * @param stat /api/hot 返回的统计（含 lifer* 字段），null 表示榜单还没回来
+ */
+function renderMyPanel(stat) {
+  const ll = state.liferInfo;
+  const sub = $('myUserSub');
+  const stats = $('myStats');
+  const cmp = $('myCompared');
+
+  if (ll) {
+    const avg = ll.speciesCount ? (ll.recordSum / ll.speciesCount).toFixed(1) : '0';
+    // 「精确匹配」写在这里而不是只写在说明段里：这是最容易出错、也最容易被静默改回去的一环
+    // （模糊匹配会把名字含相同子串的别的用户算进来），摆在数字旁边才好核对。
+    sub.textContent = `共 ${fmt(ll.speciesCount)} 种鸟 · ${fmt(ll.recordSum)} 条记录 · 精确匹配`;
+    stats.innerHTML =
+      myCell('总鸟种数', ll.speciesCount, '种') +
+      myCell('累计记录条数', ll.recordSum, '条') +
+      myCell('平均每种', avg, '条');
+  } else {
+    sub.textContent = state.lifer ? '正在读取名单…' : '';
+    stats.innerHTML = '';
+  }
+
+  if (!stat || !stat.liferUser) {
+    cmp.innerHTML = '<div class="notice">正在汇总当前榜单…稍后再看这里。</div>';
+    $('myBarFill').style.width = '0%';
+    $('myBarText').textContent = '';
+    $('btnMyShowNew').disabled = true;
+  } else if (stat.liferError) {
+    cmp.innerHTML = `<div class="notice error">${esc(stat.liferError)}</div>`;
+    $('myBarFill').style.width = '0%';
+    $('myBarText').textContent = '';
+    $('btnMyShowNew').disabled = true;
+  } else {
+    const total = stat.returned || 0;
+    const known = stat.liferKnownCount || 0;
+    const fresh = stat.liferNewCount || 0;
+    cmp.innerHTML =
+      myCell('当前榜单鸟种', total, '种') +
+      myCell('我已加新', known, '种', 'is-known') +
+      myCell('未加新', fresh, '种', 'is-new');
+    const pct = total ? Math.round((known / total) * 100) : 0;
+    $('myBarFill').style.width = pct + '%';
+    $('myBarText').textContent = `已加新 ${pct}%`;
+    $('btnMyShowNew').disabled = fresh === 0;
+    $('btnMyShowNew').textContent = fresh ? `只看未加新的 ${fmt(fresh)} 种` : '当前榜单已全部加新';
+  }
+
+  // 右上角入口上的小角标：当前榜单还剩多少种没加新
+  const badge = $('myEntryCount');
+  const badgeCount = stat && stat.liferUser && !stat.liferError ? stat.liferNewCount || 0 : 0;
+  badge.hidden = !badgeCount;
+  badge.textContent = badgeCount;
+  badge.title = badgeCount ? `当前榜单里你还有 ${badgeCount} 种没加新` : '';
+}
+
+/** 绑定：只校验「非空」，剩下的交给服务端去查真伪 */
+async function doBindLifer() {
+  const name = $('inpLifer').value.trim();
+  if (!name) {
+    showMyMsg('请先填用户名。');
+    $('inpLifer').focus();
+    return;
+  }
+  $('btnLiferBind').disabled = true;
+  $('btnLiferBind').textContent = '查询中…';
+  try {
+    const r = await API('user-lifelist', { user: name });
+    if (r.error) {
+      showMyMsg(r.error);
+      return;
+    }
+    state.liferInfo = r;
+    state.lifer = name;
+    if (state.filter === 'lifer') {
+      state.filter = 'all';
+      $('selFilter').value = 'all';
+    }
+    syncLiferUi();
+    persist();
+    showMyMsg('');
+    // 榜单上要长出「未加新」标记，得重新查一次
+    runQuery();
+  } catch (e) {
+    showMyMsg('绑定失败：' + e.message);
+  } finally {
+    $('btnLiferBind').disabled = false;
+    $('btnLiferBind').textContent = '绑定';
+  }
+}
+
 
 /* ---------------------------------------------------------------- *
  * 记录检索：观测地点 / 用户名称 / 鸟种名称
@@ -570,11 +810,20 @@ function renderHot(data) {
   const s = data.stat || {};
   if (!list.length) {
     const fs = filterSummary();
-    $('hotList').innerHTML =
-      `<div class="notice">该条件下没有匹配的鸟种` +
-      (fs.length ? `（${esc(fs.join(' · '))}）` : '') +
-      `，试试调整起止日期、更换地区，或清空检索条件。</div>`;
+    // 「仅未加新」筛空是最常见的一种空榜：不是没数据，而是这个地区/时段你已经全加新了。
+    // 明确说出来，免得让人以为查询坏了。
+    const liferEmpty = state.filter === 'lifer';
+    $('hotList').innerHTML = liferEmpty
+      ? `<div class="notice">当前条件下没有「未加新」的鸟种` +
+        (s.liferError ? `<br />（未加新名单没读到：${esc(s.liferError)}）` : ' —— 这个地区、这段时间的鸟你都已经加新过了。') +
+        `</div>`
+      : `<div class="notice">该条件下没有匹配的鸟种` +
+        (fs.length ? `（${esc(fs.join(' · '))}）` : '') +
+        `，试试调整起止日期、更换地区，或清空检索条件。</div>`;
     $('listFoot').innerHTML = '';
+    $('hotTitle').textContent = `本地稀有鸟种排行 · ${data.region || '全国'}`;
+    renderCacheChip(data.cache);
+    syncLiferUi();
     return;
   }
   $('hotList').innerHTML = list
@@ -590,30 +839,42 @@ function renderHot(data) {
       // 本时段的记录数放在下一行，避免「排名 1 却写着 1 条」这种看起来自相矛盾的画面
       const hasHist = x.historyCount !== null && x.historyCount !== undefined;
       const main = hasHist ? x.historyCount : x.count;
-      const mainLabel = hasHist ? '历史记录' : '本时段记录';
-      // 本时段记录再拆成「正常 / 疑问（红色标记）」两块。
+      // 「条」写进标签里而不是单列一个字：这样整行读作「212 条历史记录」，
+      // 与下面「本时段 正常 n 条 · 疑问 n 条」的单位一致，不会出现「212 历史记录」这种缺量词的读法
+      const mainLabel = hasHist ? '条历史记录' : '条本时段记录';
+      // 本时段记录拆成「正常 / 疑问（红色标记）」两块。
       // 上游按 outside_type 做的是记录级拆分，逐种核对满足「全部 = 正常 + 疑问」，
       // 所以这里直接用减法得到正常条数，不再多跑一次上游查询。
-      // 这一行始终以「本时段 N 条」开头（历史口径取不到时，脚注会统一提示降级，
-      // 不必在每张卡片上重复一遍）。
+      // 不再写「本时段 N 条」这个总数：紧接着的「正常 + 疑问」相加就等于它，
+      // 一行里摆两个总数只会让人多算一次（历史记录数已经是大数字那一行了）。
       const normalCount = Math.max(0, (Number(x.count) || 0) - (x.doubtCount || 0));
-      const split = s.doubtError
-        ? ''
-        : ` · 正常 <b>${fmt(normalCount)}</b> 条 · <span class="doubt-part${x.doubt ? ' is-doubt' : ''}">疑问 <b>${fmt(x.doubtCount)}</b> 条</span>`;
-      const histLine = `本时段 ${fmt(x.count)} 条${split}`;
+      const histLine = s.doubtError
+        ? `本时段 ${fmt(x.count)} 条` // 标疑数据取不到，只能给总数
+        : `本时段 正常 <b>${fmt(normalCount)}</b> 条` +
+          ` · <span class="doubt-part${x.doubt ? ' is-doubt' : ''}">疑问 <b>${fmt(x.doubtCount)}</b> 条</span>`;
       // 上游 AI 半自动标疑的「疑问数据」：站点用红色中文名标出，这里保持一致
       const doubtBadge = x.doubt ? `<span class="badge doubt" title="上游 AI 标疑：该时段本地区有 ${fmt(x.doubtCount)} 条记录被标记为疑问数据">疑问 ${fmt(x.doubtCount)}</span>` : '';
-      const nameCls = x.doubt ? ' class="cn is-doubt"' : ' class="cn"';
+      // 「未加新」：绑定用户在人生鸟种里没见过这一种（s.liferUser 为空说明没绑定，整块不渲染）。
+      // 用青色（不是红/绿）——红已经被「疑问数据」占用，绿在中文语境里是「跌」，都不是好选择。
+      const liferBadge = x.lifer
+        ? `<span class="badge lifer" title="${esc(state.lifer)} 的人生鸟种里没有这一种">未加新</span>`
+        : '';
+      const cls = [
+        'hot-card is-clickable',
+        x.doubt ? 'is-doubt' : '',
+        x.lifer ? 'is-lifer' : '',
+      ].filter(Boolean).join(' ');
+      const nameCls = ' class="cn' + (x.doubt ? ' is-doubt' : '') + (x.lifer ? ' is-lifer' : '') + '"';
       // 卡片可点：点了弹出该鸟种的公开报告明细（点击时才查询，不预取）。
       // role/tabindex 与概览卡保持一致，键盘 Enter / 空格同样可用。
-      return `<div class="hot-card is-clickable${x.doubt ? ' is-doubt' : ''}" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}" role="button" tabindex="0" aria-label="查看「${esc(x.name)}」出现在哪些公开报告">
+      return `<div class="${cls}" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}" data-lifer="${x.lifer ? '1' : '0'}" role="button" tabindex="0" aria-label="查看「${esc(x.name)}」出现在哪些公开报告">
         <div class="hc-head">
           <span class="rank${rankCls}">${x.rank}</span>
           <span${nameCls}>${esc(x.name)}</span>
         </div>
         <div class="hc-latin">${esc(x.latin || '')}</div>
         <div class="hc-sub">${esc([x.order, x.family].filter(Boolean).join(' · '))}</div>
-        <div class="hc-badges">${badges}${doubtBadge}</div>
+        <div class="hc-badges">${badges}${liferBadge}${doubtBadge}</div>
         <div class="hc-foot"><span class="n">${fmt(main)}</span><span class="l">${esc(mainLabel)}</span></div>
         <div class="hc-hist">${histLine}</div>
         <div class="bar-track hc-bar" title="历史稀有度 ${rar}%（按该地区全时段记录数，越少越稀有）"><div class="bar-fill" style="width:${Math.max(2, rar)}%"></div></div>
@@ -630,14 +891,30 @@ function renderHot(data) {
     : Number(s.doubtCount)
       ? `<span class="doubt-foot"><i class="doubt-dot"></i>标红的 <strong>${fmt(s.doubtCount)}</strong> 种含上游 AI 标疑的「疑问数据」，共 ${fmt(s.doubtRecordSum)} 条</span>`
       : '';
+  // 未加新：绑了用户才提。取不到名单（用户名写错 / 上游抽风）时给出可操作的提示，
+  // 而不是安静地「一种都没标」——那会让人以为「全都加新过了」，结论恰好相反。
+  let liferInfo = '';
+  if (s.liferUser) {
+    if (s.liferError) {
+      liferInfo = `<span class="warn">未加新标记暂时取不到（${esc(s.liferError)}），点右上角「我的」核对用户名</span>`;
+    } else if (Number(s.liferNewCount)) {
+      liferInfo = `<span class="lifer-foot"><i class="lifer-dot"></i>青色 <strong>${fmt(s.liferNewCount)}</strong> 种是你（${esc(s.liferUser)}）还没加新的鸟，已加新 ${fmt(s.liferKnownCount)} 种`;
+    } else if (Number(s.liferKnownCount)) {
+      liferInfo = `<span class="lifer-foot"><i class="lifer-dot"></i>当前榜单的鸟你（${esc(s.liferUser)}）都已加新</span>`;
+    }
+  }
   $('listFoot').innerHTML =
     `<span>本时段共 ${fmt(s.speciesCount ?? s.totalSpecies)} 种鸟 · 已全部展示` +
     (state.filter !== 'all' ? `（筛选：${$('selFilter').selectedOptions[0].textContent}）` : '') +
     `</span>` +
+    (liferInfo ? `<span>${liferInfo}</span>` : '') +
     (doubtInfo ? `<span>${doubtInfo}</span>` : '') +
     `<span>${basis}（条形为稀有度）</span>`;
   $('hotTitle').textContent = `本地稀有鸟种排行 · ${data.region || '全国'}`;
   renderCacheChip(data.cache);
+  // 角标 / 面板里的「当前榜单鸟种 · 我已加新 · 未加新」都来自这次的 stat，
+  // 所以放在渲染末尾统一刷新，不额外请求
+  syncLiferUi();
 }
 
 /** 展示数据是来自本地缓存还是刚回源，让缓存复用情况可见 */
@@ -745,6 +1022,10 @@ async function runQuery() {
   // 定向刷新：只让本次要用的几个缓存键失效，其余缓存继续复用
   const nocache = state.nocache ? { nocache: '1' } : {};
   state.nocache = false;
+  // 「我的」面板里的「重新获取名单」只失效人生鸟种那一份缓存，
+  // 地区榜单（要扫逐月 + 历史记录数，贵得多）照旧复用
+  const liferNocache = state.liferNocache ? { liferNocache: '1' } : {};
+  state.liferNocache = false;
   try {
     const wantCharts = sideChartsVisible();
     // 榜单是主内容：它失败才整体报错。
@@ -753,7 +1034,7 @@ async function runQuery() {
     const [overview, hot, trend] = await Promise.all([
       API('overview', { ...where, ...nocache }).catch((e) => ({ __error: e.message })),
       // 不传 top：让服务端返回该地区全部鸟种（榜单要完整展示）
-      API('hot', { ...where, ...nocache, filter: state.filter, sort: state.sort, q: state.q, ensure: 200 }),
+      API('hot', { ...where, ...nocache, ...liferNocache, filter: state.filter, sort: state.sort, q: state.q, ensure: 200, liferUser: state.lifer }),
       // 侧栏图表关闭时不请求趋势接口，省一次上游调用
       wantCharts ? API('trend', { ...where, ...nocache }).catch((e) => ({ __error: e.message, months: [] })) : Promise.resolve({ months: [] }),
     ]);
@@ -938,7 +1219,7 @@ async function reloadDetail() {
   $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取明细…</p></div>';
   try {
     if (detail.mode === 'client') {
-      const r = await API('taxons', { ...detail.where, limit: 2000 });
+      const r = await API('taxons', { ...detail.where, limit: 2000, liferUser: state.lifer });
       detail.rows = r.list || [];
       detail.meta = {
         total: r.total,
@@ -1044,12 +1325,17 @@ function detailSubText() {
 function taxonRow(x, no) {
   const hist = x.historyCount === null || x.historyCount === undefined ? '—' : fmt(x.historyCount);
   const doubt = x.doubt ? `疑问 ${fmt(x.doubtCount)}` : '—';
-  return `<tr${x.doubt ? ' class="is-doubt"' : ''}>
+  // 明细表列数固定（窄屏靠 CSS 换行），所以「未加新」不做独立一列，
+  // 直接跟在中文名后面当一枚小标记，窄屏也不会被挤掉
+  const liferTag = x.lifer
+    ? `<span class="badge lifer" title="${esc(state.lifer)} 的人生鸟种里没有这一种">未加新</span>`
+    : '';
+  return `<tr${x.doubt ? ' class="is-doubt"' : ''}${x.lifer ? ' data-lifer="1"' : ''}>
     <td class="ta-c num">${no}</td>
-    <td><div class="d-name${x.doubt ? ' is-doubt' : ''}">${esc(x.name)}</div><div class="d-latin">${esc(x.latin || '')}</div></td>
+    <td><div class="d-name${x.doubt ? ' is-doubt' : ''}${x.lifer ? ' is-lifer' : ''}">${esc(x.name)}${liferTag}</div><div class="d-latin">${esc(x.latin || '')}</div></td>
     <td class="d-dim">${esc([x.order, x.family].filter(Boolean).join(' · '))}</td>
-    <td class="ta-r num strong">${fmt(x.count)}</td>
-    <td class="ta-r num">${hist}</td>
+    <td class="ta-r num strong" data-label="本时段">${fmt(x.count)}</td>
+    <td class="ta-r num" data-label="历史">${hist}</td>
     <td class="ta-r num${x.doubt ? ' is-doubt' : ''}">${doubt}</td>
     <td><div class="badges">${levelBadge(x)}${x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : ''}${iucnBadge(x.iucn)}</div></td>
   </tr>`;
@@ -1066,18 +1352,18 @@ function reportRow(x, no, compact = false) {
     return `<tr class="is-jump" data-url="${esc(x.url || '')}">
       <td class="ta-c num">${no}</td>
       <td class="d-name">${esc(x.pointName || '—')}</td>
-      <td>${esc(x.username || '—')}</td>
-      <td class="d-dim">${esc(span)}</td>
+      <td data-label="发现人">${esc(x.username || '—')}</td>
+      <td class="d-dim" data-label="时间">${esc(span)}</td>
       <td class="d-dim mono">${link}</td>
     </tr>`;
   }
   return `<tr class="is-jump" data-url="${esc(x.url || '')}">
     <td class="ta-c num">${no}</td>
     <td class="d-name">${esc(x.pointName || '—')}</td>
-    <td class="d-dim">${esc([x.city, x.district].filter(Boolean).join(' '))}</td>
-    <td class="d-dim">${esc(span)}</td>
-    <td class="ta-r num strong">${fmt(x.taxonCount)}</td>
-    <td>${esc(x.username || '—')}</td>
+    <td class="d-dim" data-label="区县">${esc([x.city, x.district].filter(Boolean).join(' '))}</td>
+    <td class="d-dim" data-label="时段">${esc(span)}</td>
+    <td class="ta-r num strong" data-label="鸟种数">${fmt(x.taxonCount)}</td>
+    <td data-label="记录人">${esc(x.username || '—')}</td>
     <td class="d-dim mono">${link}</td>
   </tr>`;
 }
@@ -1141,9 +1427,36 @@ function renderDetail() {
 }
 
 /* ---------------------------------------------------------------- *
+ * 弹层高度要跟着「实际能看见的高度」走
+ *
+ * 手机浏览器的地址栏 / 底部工具条会伸缩，而 CSS 的 vh 是按「工具条收起」时的
+ * 高度算的 —— 只认 vh 的话，明细弹层会被摆到比可视区更低的位置，下半截
+ * （正是「上一页 / 下一页」那一条）落到屏幕外还滚不到。dvh 能解决这个问题，
+ * 但老一点的浏览器内核（旧版 WebView / 国内 App 内置浏览器）不认识它。
+ * 所以这里用 visualViewport 量出「当前真正能看到的高度」，写进 CSS 变量
+ * --vvh（web/style.css 的弹层在用），并随尺寸变化实时更新；没有
+ * visualViewport 的老引擎退回 innerHeight（同样会跟着工具条伸缩）。
+ * ---------------------------------------------------------------- */
+function trackViewportHeight() {
+  const root = document.documentElement;
+  const apply = () => {
+    const vv = window.visualViewport;
+    const h = vv && vv.height ? vv.height : window.innerHeight;
+    if (h > 0) root.style.setProperty('--vvh', `${Math.floor(h)}px`);
+  };
+  apply();
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', apply);
+  // 键盘弹出 / 收起也会改变可视高度，visualViewport 上有对应事件
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', apply);
+}
+
+/* ---------------------------------------------------------------- *
  * 事件绑定 & 启动
  * ---------------------------------------------------------------- */
 function bind() {
+  trackViewportHeight();
+
   $('selProvince').addEventListener('change', async (e) => {
     state.region.province = e.target.value;
     state.region.city = '';
@@ -1285,7 +1598,13 @@ function bind() {
     if (e.target === $('detailModal')) closeDetail(); // 点遮罩关闭
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && detail.open) closeDetail();
+    if (e.key !== 'Escape') return;
+    // 「我的」面板在 DOM 里排在明细弹层之后（层级更高），所以先关它
+    if (!$('myModal').hidden) {
+      closeMy();
+      return;
+    }
+    if (detail.open) closeDetail();
   });
   let detailTimer;
   $('dSearch').addEventListener('input', (e) => {
@@ -1310,6 +1629,48 @@ function bind() {
     detail.page += 1;
     if (detail.mode === 'server') reloadDetail();
     else renderDetail();
+  });
+
+  // ---- 「我的」：绑定用户名 / 解绑 / 只看未加新 / 重新获取名单 ----
+  $('btnMy').addEventListener('click', openMy);
+  $('myClose').addEventListener('click', closeMy);
+  $('myModal').addEventListener('click', (e) => {
+    if (e.target === $('myModal')) closeMy(); // 点遮罩关闭
+  });
+  $('btnLiferBind').addEventListener('click', doBindLifer);
+  // 手机上输入完直接按「前往 / 完成」就能绑定，不用回手去点按钮
+  $('inpLifer').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      doBindLifer();
+    }
+  });
+  $('btnLiferUnbind').addEventListener('click', () => {
+    setLifer('');
+    showMyMsg('已取消绑定。');
+    // 榜单上的青色标记要跟着撤掉，所以重查一次
+    runQuery();
+  });
+  // 「只看未加新」：等价于把榜单的筛选切成 lifer，然后回到榜单看结果
+  $('btnMyShowNew').addEventListener('click', () => {
+    state.filter = 'lifer';
+    $('selFilter').value = 'lifer';
+    closeMy();
+    runQuery();
+  });
+  // 「重新获取名单」：只忽略人生鸟种缓存（服务端 liferNocache），地区榜单照旧复用
+  $('btnMyRefresh').addEventListener('click', async () => {
+    $('btnMyRefresh').disabled = true;
+    $('btnMyRefresh').textContent = '获取中…';
+    try {
+      state.liferNocache = true;
+      await loadMyLifelist(true);
+      showMyMsg(state.liferInfo ? '已从上游重新取回你的记录。' : '');
+      runQuery();
+    } finally {
+      $('btnMyRefresh').disabled = false;
+      $('btnMyRefresh').textContent = '重新获取名单';
+    }
   });
 
   $('btnTaxon').addEventListener('click', searchTaxon);

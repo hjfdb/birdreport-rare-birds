@@ -68,6 +68,16 @@ const HISTORY_TTL_MS = Number(process.env.HISTORY_TTL_MS || 24 * 60 * 60 * 1000)
  * 它和榜单一样是按「区域 + 时段」聚合的慢查询，同节奏：一天失效一次。
  */
 const DOUBT_TTL_MS = Number(process.env.DOUBT_TTL_MS || 24 * 60 * 60 * 1000);
+/**
+ * 「绑定用户的人生鸟种」单独一份缓存。
+ *
+ * 这是「未加新」比对的基准：把某个用户**有史以来记录过的所有鸟种**取回来，
+ * 榜单里不在这个集合里的，就是对 TA 来说还没加新的鸟。
+ *
+ * 之所以能与其它缓存同节奏（一天失效一次）：加新是件很慢的事，一天里多认一两种鸟
+ * 已经算高产；而这份数据一次请求就能取全（见 lifelistLoader 的说明）。
+ */
+const LIFELIST_TTL_MS = Number(process.env.LIFELIST_TTL_MS || 24 * 60 * 60 * 1000);
 /** 郑四名录（全量鸟种名录）几乎不变，长期缓存复用即可 */
 const CATALOG_TTL_MS = Number(process.env.CATALOG_TTL_MS || 7 * 24 * 60 * 60 * 1000);
 
@@ -183,8 +193,14 @@ function serveStatic(req, res, urlPath) {
 /** 组装上游查询条件 */
 function buildWhere(q) {
   const where = {};
-  for (const k of ['province', 'city', 'district', 'startTime', 'endTime', 'pointname', 'username', 'taxonid', 'version']) {
+  for (const k of ['province', 'city', 'district', 'startTime', 'endTime', 'pointname', 'username', 'taxonid', 'mode', 'version']) {
     if (q.get(k)) where[k] = q.get(k);
+  }
+  // mode 是上游的**整条查询**匹配方式：0 或省略 = 模糊，1 = 精确。
+  // 它同时作用于 pointname / username，所以只允许这两个取值，别的值一律丢掉，
+  // 免得前端传个 mode=2 让上游按未定义行为处理。
+  if (where.mode !== undefined) {
+    where.mode = String(where.mode) === '1' ? 1 : 0;
   }
   // 直辖市：区县直接放在 district 上（与站点行为一致）
   if (where.district && where.city) {
@@ -408,6 +424,148 @@ async function loadDoubt(where, nocache = false) {
     console.warn('[api] 疑问数据标记取不到，本次榜单不带红色标记：' + e.message);
     return { byId: {}, byLatin: {}, speciesCount: 0, recordSum: 0, meta: null, error: e.message };
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 绑定用户的「人生鸟种」—— 「未加新」比对的基准
+ *
+ * 语义：把某个观鸟用户**有史以来记录过的全部鸟种**取回来，榜单里不在这个集合里的
+ * 鸟种，就是对 TA 来说**还没加新**的（「加新」= 见到人生第一种该鸟种）。
+ *
+ * 取数只用**一次**上游请求，关键在这里：
+ *   getRegionTaxons({ username: X, mode: 1 })   ← 不带 province、不带时间，**带 mode=1**
+ *
+ * ▸ 为什么必须带 mode=1（精确）—— 这是本功能最容易静默出错的地方：
+ *   上游的 `mode` 是**整条查询**的匹配方式（省略或 0 = 模糊，1 = 精确）。
+ *   实测（2026-10，用户 kkia）：
+ *     不传 mode（模糊）→ 229 行 / 229 种
+ *     mode=1  （精确）→ 212 行 / 212 种   ← 真身
+ *   精确结果是模糊结果的**真子集**（已验证），多出来的那 17 种（毛脚燕、赤麻鸭、灰斑鸠、
+ *   普通雨燕、红嘴鸥…）来自**别的用户名** —— 名字里含 "kkia" 子串的人。
+ *   也就是说：不指定 mode 时，绑定「kkia」会把邻居的鸟种也算成「已加新」，
+ *   凭空少报一批未加新，而页面看上去一切正常。
+ *
+ * ▸ 一次请求就够，不需要遍历 34 个省：
+ *     - 全国一次查（mode=1）        → 212 种
+ *     - 逐个省份查完再并集（34 次）  → 212 种，差集 0
+ *     - 分页核对（limit=200）        → 200 + 12 = 212，没有隐藏上限
+ *   注意不要和「不带 username 的全国查询」搞混：那种查询上游会 500（结果集是全国所有鸟种）；
+ *   带上 username 之后结果集只有一两百行，上游处理得很好。
+ *
+ * 匹配方式与历史稀有度 / 疑问标记保持一致：先按 taxon_id 对，对不上退回拉丁名
+ * （同一鸟种在不同名录版本下 id 不同，拉丁名才是稳定的）。判定方向取**并集** ——
+ * id 或拉丁名任一命中就算「已加新」，宁可漏报也不能把没见过的种说成见过。
+ * ------------------------------------------------------------------ */
+
+const lifelistLoader = (user) => async () => {
+  const r = await getRegionTaxons({ username: user, mode: 1 }, { limit: 2000 });
+  const rows = r.data || [];
+  const byId = {};
+  const byLatin = {};
+  for (const t of rows) {
+    const n = Number(t.recordcount) || 0;
+    if (n <= 0) continue;
+    const id = Number(t.taxon_id) || 0;
+    if (id) byId[id] = (byId[id] || 0) + n;
+    const lk = latinKey(t.latinname);
+    if (lk) byLatin[lk] = (byLatin[lk] || 0) + n;
+  }
+  return {
+    user,
+    byId,
+    byLatin,
+    speciesCount: Object.keys(byId).length,
+    recordSum: Object.values(byId).reduce((s, n) => s + n, 0),
+    rowCount: rows.length,
+  };
+};
+
+/**
+ * 取某个用户的人生鸟种。
+ * 上游失败时返回 null（而不是抛错）—— 「未加新」只是个附加标记，
+ * 拿不到就整页照常显示，不能因为一个标记把榜单打挂。
+ *
+ * 缓存键里的 `u2` 是**口径版本号**，不是装饰：
+ * 这份名单的取法变过一次（最初没传 mode，上游按模糊匹配返回，kkia 拿到 229 种；
+ * 加上 mode=1 之后才是真的 212 种）。缓存键当时没变，于是旧结果在 24 小时 TTL 里
+ * 被继续当作新结果用 —— 页面上看着一切正常，数字却还是错的。
+ * 以后再改这份名单的口径（字段、匹配方式、口径范围），就把这里的版本号 +1。
+ */
+const LIFELIST_KEY_VERSION = 'u2';
+async function loadLifelist(user, nocache = false) {
+  if (!user) return null;
+  try {
+    const { value, meta } = await cached(
+      `lifelist|${LIFELIST_KEY_VERSION}|${user}`,
+      lifelistLoader(user),
+      nocache,
+      { ttl: LIFELIST_TTL_MS }
+    );
+    return { ...value, meta, error: '' };
+  } catch (e) {
+    console.warn(`[api] 用户「${user}」的人生鸟种取不到，本次不做未加新比对：` + e.message);
+    return null;
+  }
+}
+
+/** 附在返回体里的空结果，避免各处重复写一大串默认值 */
+const LIFER_EMPTY = {
+  liferUser: '',
+  liferSpeciesCount: 0, // 该用户人生鸟种总数
+  liferRecordSum: 0, // 该用户记录条数合计
+  liferNewCount: 0, // 本榜单里「未加新」的种数
+  liferKnownCount: 0, // 本榜单里「已加新」的种数
+  liferError: '',
+};
+
+/**
+ * 给榜单每一行贴「未加新」标记。
+ * @returns {{list: Array, info: object}} info 见 LIFER_EMPTY 的字段
+ */
+async function applyLifer(list, liferUser, nocache) {
+  if (!liferUser) return { list, info: { ...LIFER_EMPTY } };
+  const ll = await loadLifelist(liferUser, nocache);
+  if (!ll) {
+    return {
+      list,
+      info: { ...LIFER_EMPTY, liferUser, liferError: `用户「${liferUser}」的记录取不到（上游限流或网络异常），稍后再试` },
+    };
+  }
+
+  // 名单为空**必须当成失败**，绝不能当成「这个用户一种鸟都没见过」：
+  // 上游对不存在的用户名是正常返回空集（不是报错），真按空集比对的话，
+  // 每一种鸟都会被标成「未加新」—— 页面看上去一切正常，结论却完全错了。
+  // 这是这个功能里最容易静默出错的地方，所以在这里单独拦一道。
+  if (ll.speciesCount === 0) {
+    return {
+      list,
+      info: { ...LIFER_EMPTY, liferUser, liferError: `用户「${liferUser}」在观鸟记录中心查不到任何记录 —— 请核对用户名（注意区分大小写）` },
+    };
+  }
+
+  let newCount = 0;
+  let knownCount = 0;
+  const out = list.map((x) => {
+    let v = ll.byId[x.taxonId];
+    if (v === undefined) v = ll.byLatin[latinKey(x.latin)];
+    const known = v !== undefined && v > 0;
+    if (known) knownCount += 1;
+    else newCount += 1;
+    // lifer = 该用户没见过 = 未加新；liferCount 是 TA 对这一种的记录条数（已加新时才有意义）
+    return { ...x, lifer: !known, liferCount: known ? v : 0 };
+  });
+
+  return {
+    list: out,
+    info: {
+      liferUser,
+      liferSpeciesCount: ll.speciesCount,
+      liferRecordSum: ll.recordSum,
+      liferNewCount: newCount,
+      liferKnownCount: knownCount,
+      liferError: '',
+    },
+  };
 }
 
 /**
@@ -819,13 +977,23 @@ const routes = {
   // 三份口径分开缓存：榜单 24 小时、历史 24 小时、疑问标记 24 小时，互不影响。
   async 'GET /api/hot'(q) {
     const where = buildWhere(q);
-    // 上游对全国级别的鸟种聚合查询会超时（500 系统内部异常），这里直接短路
+    // 上游对全国级别的鸟种聚合查询会超时（500 系统内部异常），这里直接短路。
+    // 注意与「绑定用户的人生鸟种」区分：那个查询**带 username**，结果集只有几百行，
+    // 即使不带 province 上游也能正常返回（见 lifelistLoader 的实测记录）。
+    const liferUserEarly = (q.get('liferUser') || '').trim();
     if (!where.province) {
       return {
         region: '全国',
         where,
         unsupported: true,
-        stat: { totalSpecies: 0, speciesCount: 0, recordSum: 0, returned: 0, levelKnownCount: 0, coverage: 0, national1: 0, national2: 0, sanYou: 0, chinaEndemic: 0, threatened: 0, minCount: 0, maxCount: 0, historyUsed: false, historySpeciesCount: 0, historyMatched: 0, historyError: '', doubtCount: 0, doubtRecordSum: 0, doubtSpeciesCount: 0, doubtError: '' },
+        stat: {
+          totalSpecies: 0, speciesCount: 0, recordSum: 0, returned: 0, levelKnownCount: 0, coverage: 0,
+          national1: 0, national2: 0, sanYou: 0, chinaEndemic: 0, threatened: 0, minCount: 0, maxCount: 0,
+          historyUsed: false, historySpeciesCount: 0, historyMatched: 0, historyError: '',
+          doubtCount: 0, doubtRecordSum: 0, doubtSpeciesCount: 0, doubtError: '',
+          ...LIFER_EMPTY,
+          liferUser: liferUserEarly,
+        },
         pending: 0,
         list: [],
       };
@@ -851,11 +1019,21 @@ const routes = {
     let list = hist.rows;
     const levelKnownCount = head.filter((x) => x.levelKnown).length;
 
+    // 「未加新」比对：绑定用户在右上角填的那个观鸟用户，其人生鸟种里没有的种标出来。
+    // 必须排在筛选之前 —— 因为「仅未加新」本身就是一个筛选条件。
+    const liferUser = (q.get('liferUser') || '').trim();
+    // 右上角「重新获取名单」只想刷人生鸟种这一份缓存，不该顺手把地区榜单缓存也打掉
+    // （地区榜单要扫逐月 + 历史记录数，比名单贵得多），所以单开一个开关。
+    const liferNocache = nocache || q.get('liferNocache') === '1';
+    const lifer = await applyLifer(list, liferUser, liferNocache);
+    list = lifer.list;
+
     if (keyword) list = list.filter((x) => x.name.includes(keyword) || (x.latin || '').toLowerCase().includes(keyword));
     if (filter === 'national') list = list.filter((x) => x.chinaLevel === '国家一级' || x.chinaLevel === '国家二级');
     else if (filter === 'protected') list = list.filter((x) => x.chinaLevel);
     else if (filter === 'chinaEndemic') list = list.filter((x) => x.chinaEndemic);
     else if (filter === 'doubt') list = list.filter((x) => x.doubt);
+    else if (filter === 'lifer') list = list.filter((x) => x.lifer);
 
     // min / max 都取「历史全时段」口径（即排序依据本身）
     const keys = list.map(rarityKey);
@@ -913,6 +1091,8 @@ const routes = {
       doubtRecordSum: list.reduce((s, x) => s + (x.doubtCount || 0), 0),
       doubtSpeciesCount: hist.doubtSpeciesCount,
       doubtError: hist.doubtError,
+      // 「未加新」比对结果（没绑用户时全为 0 / 空）
+      ...lifer.info,
     };
 
     return { region: regionLabel(where), where, stat, pending, list: out, cache: meta };
@@ -923,7 +1103,13 @@ const routes = {
   // 「该地区历史全时段（不加时间范围）的记录数」计算并排序。
   async 'GET /api/taxons'(q) {
     const where = buildWhere(q);
-    if (!where.province) return { region: '全国', where, unsupported: true, total: 0, speciesCount: 0, recordSum: 0, doubtCount: 0, doubtRecordSum: 0, doubtSpeciesCount: 0, doubtError: '', list: [] };
+    if (!where.province) {
+      return {
+        region: '全国', where, unsupported: true, total: 0, speciesCount: 0, recordSum: 0,
+        doubtCount: 0, doubtRecordSum: 0, doubtSpeciesCount: 0, doubtError: '',
+        ...LIFER_EMPTY, liferUser: (q.get('liferUser') || '').trim(), list: [],
+      };
+    }
     const sort = q.get('sort') || 'record';
     const limit = Math.min(Number(q.get('limit') || 500), 2000);
     const nocache = q.get('nocache') === '1';
@@ -934,7 +1120,14 @@ const routes = {
     });
 
     const hist = await rankByHistory(list, where, nocache);
-    const rows = [...hist.rows];
+    // 明细表也做未加新比对：点开「记录鸟种数」看全部鸟种时，
+    // 未加新的那些同样要有标记，否则和榜单对不上。（liferNocache 与 /api/hot 同义）
+    const lifer = await applyLifer(
+      hist.rows,
+      (q.get('liferUser') || '').trim(),
+      nocache || q.get('liferNocache') === '1'
+    );
+    const rows = [...lifer.list];
     if (sort === 'protection') {
       rows.sort((a, b) => {
         const la = LEVEL_ORDER[a.chinaLevel] || 9;
@@ -960,9 +1153,61 @@ const routes = {
       doubtRecordSum: rows.reduce((s, x) => s + (x.doubtCount || 0), 0),
       doubtSpeciesCount: hist.doubtSpeciesCount,
       doubtError: hist.doubtError,
+      // 「未加新」比对结果（没绑用户时全为 0 / 空）
+      ...lifer.info,
       pending,
       list: rows.slice(0, limit).map((x, i) => ({ ...x, rank: i + 1 })),
       cache: meta,
+    };
+  },
+
+  /**
+   * 某个观鸟用户的「人生鸟种」清单。
+   *
+   * 一次上游请求取全（不带 province、不带时间，见 lifelistLoader 的实测记录），
+   * 缓存 24 小时。前端右上角绑定用户后用它与榜单比对，标出「未加新」的鸟种。
+   *
+   * 参数：user（推荐）/ username（兼容写法）；nocache=1 强制回源。
+   */
+  async 'GET /api/user-lifelist'(q) {
+    const user = (q.get('user') || q.get('username') || '').trim();
+    if (!user) return { user: '', speciesCount: 0, recordSum: 0, error: '缺少 user 参数', list: [] };
+
+    const ll = await loadLifelist(user, q.get('nocache') === '1');
+    if (!ll) {
+      return {
+        user,
+        speciesCount: 0,
+        recordSum: 0,
+        error: `取不到用户「${user}」的记录 —— 上游限流或网络异常，稍后再试。`,
+        list: [],
+      };
+    }
+    // 空集 = 用户名查不到（上游对不存在的用户是正常返回空集，不是报错），必须如实说明，
+    // 否则前端会把这个空名单当成「他一种鸟都没见过」，把所有鸟都标成未加新。
+    if (ll.speciesCount === 0) {
+      return {
+        user,
+        speciesCount: 0,
+        recordSum: 0,
+        error: `用户「${user}」在观鸟记录中心查不到任何记录 —— 请核对用户名（注意区分大小写）。`,
+        list: [],
+      };
+    }
+
+    // 明细列表按「该用户的记录条数」降序：记录得多的自然是他熟悉的地方/常见鸟
+    const list = Object.entries(ll.byId)
+      .map(([id, count]) => ({ taxonId: Number(id), count }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      user: ll.user,
+      speciesCount: ll.speciesCount,
+      recordSum: ll.recordSum,
+      rowCount: ll.rowCount,
+      error: '',
+      list,
+      cache: ll.meta,
     };
   },
 
