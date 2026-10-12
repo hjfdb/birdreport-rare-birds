@@ -112,7 +112,18 @@ jobs:
           ARGS=(--title "$GITHUB_REF_NAME" --verify-tag --generate-notes)
           case "$GITHUB_REF_NAME" in *-*) ARGS+=(--prerelease);; esac
 
-          gh release create "$GITHUB_REF_NAME" "dist/${ASSET_NAME}" "${ARGS[@]}"
+          # gh release create 不是幂等的：若同名 Release 已存在（典型情况是先在
+          # 网页上建好了 Release 或草稿、之后才推 tag），它只会报「已存在」然后
+          # 整个 job 失败，产物根本传不上去 —— 线上就留下一个没有附件的空 Release。
+          # （v0.0.2 就踩过这个坑。）所以先探一下：
+          #   已存在 → 只上传并覆盖附件，不动你已经写好的说明与预发布标记
+          #   不存在 → 照旧新建
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在，改为上传并覆盖附件（保留其说明与标记）"
+            gh release upload "$GITHUB_REF_NAME" "dist/${ASSET_NAME}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "dist/${ASSET_NAME}" "${ARGS[@]}"
+          fi
 
       - name: 上传构建产物（仅手动触发时）
         if: github.event_name == 'workflow_dispatch'
