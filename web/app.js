@@ -1115,7 +1115,8 @@ function renderDetail() {
   } else {
     // 点鸟种卡片进来的那个弹层用精简列（发现点 / 发现人 / 时间）
     const compact = detail.metric === 'taxonReports';
-    $('detailBody').innerHTML = `<table class="dtable">
+    // dtable-report：两个报告表共用的标记，供窄屏切换成堆叠排版（见 style.css 手机端块）
+    $('detailBody').innerHTML = `<table class="dtable dtable-report">
       <thead><tr>${
         compact
           ? '<th class="ta-c">#</th><th>发现点</th><th>发现人</th><th>时间</th><th>报告</th>'
