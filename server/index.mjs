@@ -35,6 +35,7 @@ import {
   searchRecords,
   getActivity,
   getActivityTaxons,
+  getMemberTimeline,
 } from './birdreport.mjs';
 import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
@@ -495,6 +496,22 @@ async function loadDoubt(where, nocache = false) {
   }
 }
 
+/** 郑四名录的 id / 拉丁名索引（记忆化，名录本身有 7 天缓存；人生鸟种列表补名字 / 目科用） */
+let catalogLookupMemo = null;
+async function catalogLookup() {
+  const { value: cat } = await loadCatalog();
+  if (catalogLookupMemo && catalogLookupMemo.prefix === cat.prefix) return catalogLookupMemo;
+  const byId = new Map();
+  const byLatin = new Map();
+  for (const s of cat.list) {
+    if (s.id) byId.set(Number(s.id), s);
+    const lk = latinKey(s.latin);
+    if (lk && !byLatin.has(lk)) byLatin.set(lk, s);
+  }
+  catalogLookupMemo = { prefix: cat.prefix, byId, byLatin };
+  return catalogLookupMemo;
+}
+
 /* ------------------------------------------------------------------ *
  * 绑定用户的「人生鸟种」—— 「未加新」比对的基准
  *
@@ -531,11 +548,15 @@ const lifelistLoader = (user) => async () => {
   const rows = r.data || [];
   const byId = {};
   const byLatin = {};
+  const nameById = {}; // 给「收藏画像」用（名字随行带回来，免得再去名录里猜）
   for (const t of rows) {
     const n = Number(t.recordcount) || 0;
     if (n <= 0) continue;
     const id = Number(t.taxon_id) || 0;
-    if (id) byId[id] = (byId[id] || 0) + n;
+    if (id) {
+      byId[id] = (byId[id] || 0) + n;
+      nameById[id] = { name: t.taxonname || '', latin: t.latinname || '' };
+    }
     const lk = latinKey(t.latinname);
     if (lk) byLatin[lk] = (byLatin[lk] || 0) + n;
   }
@@ -543,6 +564,7 @@ const lifelistLoader = (user) => async () => {
     user,
     byId,
     byLatin,
+    nameById,
     speciesCount: Object.keys(byId).length,
     recordSum: Object.values(byId).reduce((s, n) => s + n, 0),
     rowCount: rows.length,
@@ -574,6 +596,129 @@ async function loadLifelist(user, nocache = false) {
   } catch (e) {
     console.warn(`[api] 用户「${user}」的人生鸟种取不到，本次不做未加新比对：` + e.message);
     return null;
+  }
+}
+
+/** 昨天的日期（YYYY-MM-DD，按本地时区算）—— 「今天新来了」的对比基准用 */
+function prevDayOf(ymd) {
+  const d = new Date(`${ymd}T00:00:00`);
+  d.setDate(d.getDate() - 1);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 「今天新来了」的对比基准：昨天（同一地区 + 同一检索条件）出现过的鸟种集合。
+ * 只在单日查询时使用；每天每组合最多回源一次（HOT_TTL 缓存），失败留 60 秒标记
+ * 防止反复重打。拿不到就返回 null —— 只影响「新」角标，绝不影响榜单本身。
+ */
+async function loadPrevDaySpecies(where, nocache) {
+  if (!where.startTime || where.startTime !== where.endTime) return null;
+  const day = prevDayOf(where.startTime);
+  const prevWhere = { ...where, startTime: day, endTime: day };
+  const key = whereKey(prevWhere, 'hot-prev');
+  try {
+    const { value } = await cached(key, regionSpeciesLoader(prevWhere), nocache, { ttl: HOT_TTL_MS });
+    if (value.failed) return null;
+    const ids = new Set();
+    const latins = new Set();
+    for (const t of value.list) {
+      const id = Number(t.taxon_id) || 0;
+      if (id) ids.add(id);
+      const lk = latinKey(t.latinname);
+      if (lk) latins.add(lk);
+    }
+    return { known: (x) => ids.has(Number(x.taxonId)) || latins.has(latinKey(x.latin)) };
+  } catch (e) {
+    cache.set(key, { list: [], total: 0, failed: e.message }, { ttl: DEGRADED_TTL_MS });
+    console.warn('[api] 昨日清单取不到（本次不打「新」角标）：' + e.message);
+    return null;
+  }
+}
+
+/**
+ * 某个用户名下**被上游标疑**（outside_type=1）的鸟种 → 疑问记录条数。
+ * 「我的人生鸟种」列表里给这些种标红用；和名单同节奏缓存 24 小时
+ * （每个用户每天最多多查这一次），失败留 60 秒标记防重打。
+ */
+const lifelistDoubtLoader = (user) => async () => {
+  const r = await getRegionTaxons({ username: user, mode: 1, outside_type: 1 }, { limit: 2000 });
+  const byId = {};
+  for (const t of r.data || []) {
+    const n = Number(t.recordcount) || 0;
+    const id = Number(t.taxon_id) || 0;
+    if (n > 0 && id) byId[id] = (byId[id] || 0) + n;
+  }
+  return { byId, speciesCount: Object.keys(byId).length };
+};
+async function loadLifelistDoubt(user, nocache = false) {
+  const key = `lifelist-doubt|u1|${user}`;
+  try {
+    const { value } = await cached(key, lifelistDoubtLoader(user), nocache, { ttl: LIFELIST_TTL_MS });
+    if (value.failed) return null;
+    return value;
+  } catch (e) {
+    cache.set(key, { byId: {}, speciesCount: 0, failed: e.message }, { ttl: DEGRADED_TTL_MS });
+    console.warn(`[api] 用户「${user}」的疑问标记取不到（列表里不标红）：` + e.message);
+    return null;
+  }
+}
+
+/**
+ * 「加新时间」：上游的用户加新时间线（front/record/year/taxon/member/timeline）。
+ * 每行 = 一个加新时间点 + 「鸟名[省 市 区县]」，取每种最早出现的时刻当加新日期。
+ * ⚠ 该接口只覆盖**今年**（year / startTime / start_time 参数实测全被忽略），
+ * 更早的年份拿不到日期 —— 有就附上、没有就不伪造。缓存与人生名册同节奏（24 小时）。
+ */
+const lifelistDatesLoader = (memberId) => async () => {
+  const r = await getMemberTimeline(memberId);
+  const byName = {};
+  for (const e of r.data || []) {
+    const t = String(e.start_time || '').slice(0, 10);
+    if (!t) continue;
+    for (const raw of String(e.taxon_names || '').split(',')) {
+      const m = raw.trim().match(/^(.+?)\s*\[(.+?)\]\s*$/);
+      const name = normName(m ? m[1] : raw);
+      if (!name) continue;
+      const prev = byName[name];
+      if (!prev || t < prev.time) byName[name] = { time: t, place: m ? m[2].trim() : '' };
+    }
+  }
+  return { byName };
+};
+async function loadLifelistDates(memberId, nocache = false) {
+  const key = `lifelist-dates|u1|${memberId}`;
+  try {
+    const { value } = await cached(key, lifelistDatesLoader(memberId), nocache, { ttl: LIFELIST_TTL_MS });
+    if (value.failed) return null;
+    return value;
+  } catch (e) {
+    cache.set(key, { byName: {}, failed: e.message }, { ttl: DEGRADED_TTL_MS });
+    console.warn(`[api] 用户 ${memberId} 的加新时间线取不到（列表不标日期）：` + e.message);
+    return null;
+  }
+}
+
+/**
+ * 用户名 → memberId：时间线接口只认数字 id（活动搜索的返回里带 userid）。
+ * memberId 终身不变，缓存一个月；窗口取近三年，避免大范围查询。查不到就返回 0。
+ */
+const memberIdLoader = (user) => async () => {
+  const y = new Date().getFullYear();
+  const r = await searchRecords({ username: user, startTime: `${y - 3}-01-01`, endTime: todayYmd() }, { limit: 1, page: 1 });
+  const row = (r.data || [])[0];
+  return { memberId: row ? Number(row.userid) || 0 : 0 };
+};
+async function loadMemberId(user, nocache = false) {
+  const key = `member-id|u1|${user}`;
+  try {
+    const { value } = await cached(key, memberIdLoader(user), nocache, { ttl: HISTORY_TTL_MS });
+    if (value.failed) return 0;
+    return value.memberId || 0;
+  } catch (e) {
+    cache.set(key, { memberId: 0, failed: e.message }, { ttl: DEGRADED_TTL_MS });
+    console.warn(`[api] 用户名「${user}」的 memberId 取不到（列表不标加新日期）：` + e.message);
+    return 0;
   }
 }
 
@@ -1129,6 +1274,9 @@ const routes = {
       nocache,
     });
 
+    // 「今天新来了」的对比基准（单日查询才有）与历史稀有度并行取，互不拖慢
+    const prevPromise = loadPrevDaySpecies(where, nocache);
+
     // 贴上「历史记录数」并按历史稀有度排序（历史取不到时自动退回本时段记录数）
     const hist = await rankByHistory(allTaxons, where, nocache);
     let list = hist.rows;
@@ -1172,11 +1320,15 @@ const routes = {
     const rarityOf = (c) =>
       logMax <= 0 ? 1 : +Math.max(0, Math.min(1, 1 - Math.log(Math.max(0, c) + 1) / logMax)).toFixed(4);
 
+    const prev = await prevPromise;
     const out = list.slice(0, top).map((x, i) => ({
       ...x,
       rank: i + 1,
       rarity: rarityOf(rarityKey(x)),
+      // 昨天同一条件下没有它 → 今天新出现（拿不到昨日清单时统一为 false，前端也不展示）
+      isNew: prev ? !prev.known(x) : false,
     }));
+    const newCount = prev ? out.filter((x) => x.isNew).length : 0;
 
     const stat = {
       totalSpecies,
@@ -1206,6 +1358,9 @@ const routes = {
       doubtRecordSum: list.reduce((s, x) => s + (x.doubtCount || 0), 0),
       doubtSpeciesCount: hist.doubtSpeciesCount,
       doubtError: hist.doubtError,
+      // 「今天新来了」：对比昨天（仅单日查询）；newComparable=false 时前端不展示这一块
+      newComparable: !!prev,
+      newCount,
       // 「未加新」比对结果（没绑用户时全为 0 / 空）
       ...lifer.info,
     };
@@ -1310,10 +1465,53 @@ const routes = {
       };
     }
 
-    // 明细列表按「该用户的记录条数」降序：记录得多的自然是他熟悉的地方/常见鸟
-    const list = Object.entries(ll.byId)
+    // 明细列表按「该用户的记录条数」降序：记录得多的自然是他熟悉的地方/常见鸟。
+    // 逐种补上 名字 / 目科 / 保护等级 / 疑问标记：「总鸟种数」点开的列表直接用这份。
+    // 名字取自名单随行带回的 nameById（老缓存没有就查郑四名录兜底），等级走本地字典
+    // （零额外上游），疑问用与名单同节奏缓存的标疑清单（每人每天最多多查一次）。
+    const doubt = await loadLifelistDoubt(ll.user, q.get('nocache') === '1');
+    // 「加新时间」：今年的加新有精确日期与地点（见 lifelistDatesLoader 的说明），更早的没有
+    let dates = null;
+    try {
+      const memberId = await loadMemberId(ll.user, q.get('nocache') === '1');
+      if (memberId) dates = await loadLifelistDates(memberId, q.get('nocache') === '1');
+    } catch (e) {
+      dates = null;
+    }
+    const lookup = await catalogLookup().catch(() => null);
+    const sorted = Object.entries(ll.byId)
       .map(([id, count]) => ({ taxonId: Number(id), count }))
       .sort((a, b) => b.count - a.count);
+    await ensureLevels(sorted.map((x) => x.taxonId), { limit: 80, wait: true });
+    const levels = readCachedLevels(sorted.map((x) => x.taxonId));
+    const list = sorted.map((x) => {
+      const meta = (ll.nameById && ll.nameById[x.taxonId]) || null;
+      const hit = lookup
+        ? lookup.byId.get(Number(x.taxonId)) || (meta && meta.latin ? lookup.byLatin.get(latinKey(meta.latin)) : null)
+        : null;
+      const lv = levels[x.taxonId] || {};
+      const dq = doubt && doubt.byId[x.taxonId];
+      const name = (meta && meta.name) || (hit && hit.name) || `#${x.taxonId}`;
+      const did = dates ? dates.byName[normName(name)] : null;
+      return {
+        taxonId: x.taxonId,
+        count: x.count,
+        name,
+        latin: (meta && meta.latin) || (hit && hit.latin) || '',
+        order: (hit && hit.order) || '',
+        family: (hit && hit.family) || '',
+        chinaLevel: lv.china_level || '',
+        iucn: lv.iucn || '',
+        chinaEndemic: !!lv.is_china,
+        doubt: !!dq,
+        doubtCount: dq || 0,
+        // 加新时间与地点（今年的才有；上游的加新时间线只覆盖当年）
+        firstTime: did ? did.time : '',
+        firstPlace: did ? did.place : '',
+      };
+    });
+    // 排序：按加新时间倒序（今年加新在前）；没有日期的按记录数降序跟在后面
+    list.sort((a, b) => String(b.firstTime || '').localeCompare(String(a.firstTime || '')) || b.count - a.count);
 
     return {
       user: ll.user,
@@ -1322,6 +1520,7 @@ const routes = {
       rowCount: ll.rowCount,
       error: '',
       list,
+      doubtSpeciesCount: list.filter((x) => x.doubt).length,
       cache: ll.meta,
     };
   },
@@ -1378,6 +1577,8 @@ const routes = {
     const reportId = (q.get('reportId') || '').trim();
     if (!reportId) throw new HttpError(400, '缺少 reportId');
     const liferUser = (q.get('liferUser') || '').trim();
+    // 页面当前的条件（地区 / 日期）：用来给清单里的每种缀「该地区近两年记录数」
+    const where = buildWhere(q);
     const { value, meta } = await cached(
       `report|${reportId}`,
       async () => {
@@ -1429,6 +1630,20 @@ const routes = {
       q.get('nocache') === '1'
     );
     const payload = { ...value, cache: meta };
+    // 给清单里的每种缀上「该地区近两年记录数」（与榜单共用同一份历史缓存，
+    // 零额外上游；拿不到就跳过 —— 只是少一行小注，不影响报告本身）
+    if (where.province) {
+      try {
+        const hist = await loadHistory(where);
+        if (!hist.error) {
+          payload.list = payload.list.map((x) => {
+            let v = hist.byId[x.taxonId];
+            if (v === undefined) v = hist.byLatin[latinKey(x.latin)];
+            return { ...x, histCount: v === undefined ? null : v };
+          });
+        }
+      } catch (e) { /* 静默 */ }
+    }
     // 「未加新」比对：与榜单共用同一份人生鸟种名单（名单本身不因此回源）
     if (liferUser) {
       const lifer = await applyLifer(payload.list, liferUser, false);

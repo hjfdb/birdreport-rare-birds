@@ -194,6 +194,13 @@ export const getActivityTaxons = (reportId) =>
   api('/front/activity/taxon', { reportId, page: 1, limit: 1500 });
 
 /**
+ * 用户的「加新时间线」：每个时间点 + 当时加新的鸟种（带地点）。
+ * ⚠ 实测只覆盖**今年**：year / startTime / start_time 等参数都会被忽略。
+ */
+export const getMemberTimeline = (memberId) =>
+  api('/front/record/year/taxon/member/timeline', { member_id: memberId });
+
+/**
  * 鸟种保护等级（国家重点保护 / IUCN / 中国生物多样性红色名录 / 是否中国特有）
  * @returns {Promise<{taxon_id:number, china_level?:string, iucn?:string, china_iucn?:string, is_china?:string}>}
  */

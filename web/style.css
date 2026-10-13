@@ -226,6 +226,48 @@ input[type="search"] { min-width: 200px; }
 .rank.top2 { background: #9aa4b2; }
 .rank.top3 { background: #c08457; }
 
+/* 卡片角上的「＋ / ★」：加入「待去找」TODO（★ = 已加入，点击移除） */
+.hc-todo {
+  position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 7px; background: transparent; color: var(--muted);
+  font-size: 13px; line-height: 1; cursor: pointer; font-family: inherit;
+}
+.hc-todo:hover { background: #eef4fb; color: var(--primary); }
+.hc-todo:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.hc-todo.is-on { color: var(--lifer); }
+.hc-todo.is-on:hover { background: var(--lifer-soft); color: var(--lifer); }
+.hot-card .hc-head { padding-right: 22px; } /* 给角标让位 */
+
+/* ---------------- 「待去找 · TODO」：面板里的入口按钮 + 列表页 ---------------- */
+.my-todo-entry { margin-top: 12px; }
+/* 「弹出动画」选择行 */
+.my-anim-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.my-anim-row label { font-size: 12.5px; color: var(--text-2); flex: none; }
+.my-anim-row select { flex: 1; min-width: 0; }
+.my-todo { display: flex; flex-direction: column; }
+.my-todo[hidden] { display: none; }
+.todo-item { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--border); }
+.todo-item:last-child { border-bottom: 0; }
+.todo-main { flex: 1; min-width: 0; cursor: pointer; }
+.todo-name-row { display: flex; align-items: center; gap: 6px; }
+.todo-name { font-size: 13.5px; font-weight: 600; }
+.todo-where { font-size: 11.5px; color: var(--text-2); margin-top: 1px; }
+.todo-del {
+  flex: none; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border-strong);
+  background: #fff; color: var(--muted); font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.todo-del:hover { border-color: var(--red); color: var(--red); }
+
+/* ---------------- 轻提示（底部浮条） ---------------- */
+.toast {
+  position: fixed; left: 50%; bottom: 42px; transform: translateX(-50%) translateY(8px);
+  max-width: min(86vw, 420px); padding: 9px 16px; border-radius: 20px;
+  background: rgba(30, 36, 47, .92); color: #fff; font-size: 12.5px; line-height: 1.5;
+  opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 300;
+  text-align: center;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 .badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
 
 .badge {
@@ -330,6 +372,8 @@ input[type="search"] { min-width: 200px; }
 }
 .my-avatar { font-size: 22px; line-height: 1; flex: none; }
 .mu-info { flex: 1; min-width: 0; }
+/* 用户卡里的两个操作按钮纵向叠在右侧（取消绑定在上、「重新获取名单」在下） */
+.mu-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
 .mu-name { font-size: 15px; font-weight: 640; color: #0a6570; word-break: break-all; }
 .mu-sub { font-size: 11.5px; color: var(--text-2); }
 .my-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
@@ -341,11 +385,11 @@ input[type="search"] { min-width: 200px; }
 .my-cell .mv small { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 3px; }
 .my-cell.is-new .mv { color: var(--lifer); }
 .my-cell.is-known .mv { color: var(--green); }
-.my-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.my-bar-track { flex: 1; height: 8px; background: #eff2f7; border-radius: 5px; overflow: hidden; }
-.my-bar-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, #2f9e5f, #4bbd80); }
-.my-bar-text { font-size: 12px; color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.my-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; margin-bottom: 16px; }
+/* 「总鸟种数」可点：打开人生鸟种全列表 */
+.my-cell.is-clickable { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.my-cell.is-clickable:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(47, 127, 214, .14); }
+.my-cell.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.my-cell .mk .more { margin-left: 6px; font-size: 11px; color: var(--primary); }
 
 .bar-track { width: 100%; height: 7px; background: #eff2f7; border-radius: 4px; overflow: hidden; }
 .bar-fill {
@@ -404,6 +448,58 @@ input[type="search"] { min-width: 200px; }
 .stat-card .k .more { margin-left: auto; font-size: 11px; color: var(--primary); opacity: 0; transition: opacity .15s; white-space: nowrap; }
 .stat-card.is-clickable:hover .more,
 .stat-card.is-clickable:focus-visible .more { opacity: 1; }
+
+/* ---------------- 弹出层动画 ----------------
+   动效类型在「我的」面板里选（存本机），以 anim-* 类设在 <html> 上：
+   standard（默认，不带类也是它）/ zoom / fade / slide / bounce / none。
+   退场：JS 先加 is-closing 播完动画，再把弹层真正 hidden（forwards 保持尾帧）。
+   「关闭动画」与系统「减少动态效果」都会把动画全部关掉。 */
+@keyframes maskIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes maskOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes loadingIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(14px) scale(.965); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes modalOut {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(14px) scale(.965); }
+}
+@keyframes zoomIn { from { opacity: 0; transform: scale(.86); } to { opacity: 1; transform: none; } }
+@keyframes zoomOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.9); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+@keyframes slideOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(40px); } }
+@keyframes bounceIn {
+  0% { opacity: 0; transform: scale(.88); }
+  62% { opacity: 1; transform: scale(1.03); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes bounceOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.9); } }
+
+.modal-mask { animation: maskIn .18s ease-out; }
+.modal { animation: modalIn .22s cubic-bezier(.2, .85, .3, 1); }
+.loading-mask { animation: loadingIn .15s ease-out; }
+.modal-mask.is-closing { animation: maskOut .16s ease-in forwards; }
+.modal-mask.is-closing .modal { animation: modalOut .18s ease-in forwards; }
+.loading-mask.is-closing { animation: maskOut .15s ease-in forwards; }
+
+/* 其它动效类型：以 <html> 上的 anim-* 类覆盖默认 */
+html.anim-zoom .modal { animation: zoomIn .2s ease-out; }
+html.anim-zoom .modal-mask.is-closing .modal { animation: zoomOut .17s ease-in forwards; }
+html.anim-fade .modal { animation: fadeIn .2s ease-out; }
+html.anim-fade .modal-mask.is-closing .modal { animation: fadeOut .18s ease-in forwards; }
+html.anim-slide .modal { animation: slideIn .24s cubic-bezier(.2, .85, .3, 1); }
+html.anim-slide .modal-mask.is-closing .modal { animation: slideOut .18s ease-in forwards; }
+html.anim-bounce .modal { animation: bounceIn .34s ease; }
+html.anim-bounce .modal-mask.is-closing .modal { animation: bounceOut .17s ease-in forwards; }
+html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-mask, .modal, .loading-mask { animation: none; }
+  .toast { transition: none; }
+}
 
 .modal-mask {
   position: fixed; inset: 0; z-index: 60; background: rgba(15, 23, 42, .42);
@@ -484,9 +580,25 @@ input[type="search"] { min-width: 200px; }
 .rp-name.is-lifer { color: #0a6570; }
 .rp-latin { font-size: 11.5px; color: var(--muted); font-style: italic; margin-top: 1px; }
 .rp-sub { font-size: 11.5px; color: var(--text-2); margin-top: 1px; }
+.rp-when { color: #0a6570; }
 .rp-count { flex: none; text-align: right; min-width: 44px; }
 .rp-count b { font-size: 17px; font-variant-numeric: tabular-nums; }
 .rp-count span { font-size: 11px; color: var(--muted); margin-left: 2px; }
+
+/* ---------------- 「今天新来了」 ---------------- */
+.badge.isnew { background: #e8f6ee; color: #1f7a4d; border-color: #bfe6cf; }
+.new-foot { color: #1f7a4d; display: inline-flex; align-items: center; gap: 5px; }
+.new-dot { width: 7px; height: 7px; border-radius: 50%; background: #2f9e5f; display: inline-block; flex: none; }
+
+/* ---------------- 目 / 科构成里的条形行 ---------------- */
+.ord-list { display: flex; flex-direction: column; }
+.ord-item { display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid var(--border); }
+.ord-item:last-child { border-bottom: 0; }
+.ord-name { flex: none; width: 84px; font-size: 13px; font-weight: 550; }
+.ord-bar-track { flex: 1; height: 8px; background: #eff2f7; border-radius: 5px; overflow: hidden; }
+.ord-bar-track i { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, #4f9ae0, #2f7fd6); }
+.ord-num { flex: none; font-size: 11.5px; color: var(--text-2); font-variant-numeric: tabular-nums; text-align: right; }
+.ord-num b { font-weight: 650; color: var(--text); }
 
 /* ---------------- 弹层：窄屏或矮屏下的紧凑排版 ----------------
    矮屏主要是横屏手机（宽度超过 720px、高度只有三四百像素）：24px 的遮罩留白
@@ -663,6 +775,4 @@ input[type="search"] { min-width: 200px; }
   .my-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .my-form-row { flex-direction: column; }
   .my-form-row .btn { width: 100%; }
-  .my-actions { gap: 6px; }
-  .my-actions .btn { flex: 1 1 100%; }
 }

@@ -81,12 +81,64 @@ function setStatus(kind, text) {
   $('statusDot').className = 'dot ' + (kind || '');
   $('statusText').textContent = text;
 }
+/**
+ * 带退场动画地隐藏一个弹层：加 is-closing 播 CSS 退场动画，随后真正 hidden。
+ * 期间若被重新打开（show 路径会去掉 is-closing），这次关闭自动作废。
+ * 系统开了「减少动态效果」则立即隐藏。
+ */
+function hideAnimated(el, ms = 220) {
+  if (!el || el.hidden || el.classList.contains('is-closing')) return;
+  if (
+    document.documentElement.classList.contains('anim-none') ||
+    (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  ) {
+    el.hidden = true;
+    return;
+  }
+  el.classList.add('is-closing');
+  setTimeout(() => {
+    if (el.classList.contains('is-closing')) {
+      el.classList.remove('is-closing');
+      el.hidden = true;
+    }
+  }, ms);
+}
+
+/* ---------------------------------------------------------------- *
+ * 弹出动画偏好：类型在「我的」面板里选（存本机），设在 <html> 的 anim-* 类上。
+ * standard（默认）/ zoom / fade / slide / bounce / none —— 具体见 style.css。
+ * ---------------------------------------------------------------- */
+const ANIM_KEY = 'birdreport.anim.v1';
+const ANIM_TYPES = ['zoom', 'standard', 'fade', 'slide', 'bounce', 'none'];
+const ANIM_DEFAULT = 'zoom'; // 默认：缩放弹出
+const ANIM_LABELS = { standard: '标准（上浮）', zoom: '缩放弹出', fade: '淡入', slide: '侧滑', bounce: '弹跳', none: '关闭动画' };
+let animType = (() => {
+  try {
+    const v = localStorage.getItem(ANIM_KEY);
+    return ANIM_TYPES.includes(v) ? v : ANIM_DEFAULT;
+  } catch (e) {
+    return ANIM_DEFAULT;
+  }
+})();
+function applyAnim() {
+  for (const t of ANIM_TYPES) document.documentElement.classList.toggle('anim-' + t, t === animType);
+}
+function setAnim(t) {
+  animType = ANIM_TYPES.includes(t) ? t : ANIM_DEFAULT;
+  try {
+    localStorage.setItem(ANIM_KEY, animType);
+  } catch (e) { /* 隐私模式：忽略 */ }
+  applyAnim();
+}
+applyAnim();
+
 function showLoading(text) {
   $('loadingText').textContent = text || '正在汇总数据…';
+  $('loading').classList.remove('is-closing');
   $('loading').hidden = false;
 }
 function hideLoading() {
-  $('loading').hidden = true;
+  hideAnimated($('loading'), 180);
 }
 
 /* ---------------------------------------------------------------- *
@@ -418,14 +470,17 @@ function syncLiferUi() {
 
 /** 打开「我的」面板；已绑定时顺手把最新名单拉回来（面板里要显示「总鸟种数」） */
 async function openMy() {
+  $('myModal').classList.remove('is-closing'); // 若赶上上一次的退场动画，取消它
   $('myModal').hidden = false;
+  $('selAnim').value = animType; // 动画设置回填
+  renderTodoEntry(); // TODO 与是否绑定用户无关，打开面板就先刷新入口按钮上的数量
   // 只把光标放进输入框（已绑定时那个框是隐藏的，别去 focus 它）
   if (!state.lifer) $('inpLifer').focus({ preventScroll: true });
   else await loadMyLifelist();
 }
 
 function closeMy() {
-  $('myModal').hidden = true;
+  hideAnimated($('myModal')); // 播完退场动画再真正隐藏
 }
 
 /** 取回绑定用户的人生鸟种（面板里的「我目前的记录」就是它） */
@@ -472,45 +527,20 @@ function renderMyPanel(stat) {
   const ll = state.liferInfo;
   const sub = $('myUserSub');
   const stats = $('myStats');
-  const cmp = $('myCompared');
 
   if (ll) {
-    const avg = ll.speciesCount ? (ll.recordSum / ll.speciesCount).toFixed(1) : '0';
     // 「精确匹配」写在这里而不是只写在说明段里：这是最容易出错、也最容易被静默改回去的一环
     // （模糊匹配会把名字含相同子串的别的用户算进来），摆在数字旁边才好核对。
     sub.textContent = `共 ${fmt(ll.speciesCount)} 种鸟 · ${fmt(ll.recordSum)} 条记录 · 精确匹配`;
     stats.innerHTML =
-      myCell('总鸟种数', ll.speciesCount, '种') +
-      myCell('累计记录条数', ll.recordSum, '条') +
-      myCell('平均每种', avg, '条');
+      `<div class="my-cell is-clickable" id="myTaxonCell" role="button" tabindex="0" title="点击查看全部鸟种列表">
+        <div class="mk">总鸟种数<span class="more">查看列表 ›</span></div>
+        <div class="mv">${fmt(ll.speciesCount)}<small>种</small></div>
+      </div>` +
+      myCell('累计记录条数', ll.recordSum, '条');
   } else {
     sub.textContent = state.lifer ? '正在读取名单…' : '';
     stats.innerHTML = '';
-  }
-
-  if (!stat || !stat.liferUser) {
-    cmp.innerHTML = '<div class="notice">正在汇总当前榜单…稍后再看这里。</div>';
-    $('myBarFill').style.width = '0%';
-    $('myBarText').textContent = '';
-    $('btnMyShowNew').disabled = true;
-  } else if (stat.liferError) {
-    cmp.innerHTML = `<div class="notice error">${esc(stat.liferError)}</div>`;
-    $('myBarFill').style.width = '0%';
-    $('myBarText').textContent = '';
-    $('btnMyShowNew').disabled = true;
-  } else {
-    const total = stat.returned || 0;
-    const known = stat.liferKnownCount || 0;
-    const fresh = stat.liferNewCount || 0;
-    cmp.innerHTML =
-      myCell('当前榜单鸟种', total, '种') +
-      myCell('我已加新', known, '种', 'is-known') +
-      myCell('未加新', fresh, '种', 'is-new');
-    const pct = total ? Math.round((known / total) * 100) : 0;
-    $('myBarFill').style.width = pct + '%';
-    $('myBarText').textContent = `已加新 ${pct}%`;
-    $('btnMyShowNew').disabled = fresh === 0;
-    $('btnMyShowNew').textContent = fresh ? `只看未加新的 ${fmt(fresh)} 种` : '当前榜单已全部加新';
   }
 
   // 右上角入口上的小角标：当前榜单还剩多少种没加新
@@ -519,6 +549,179 @@ function renderMyPanel(stat) {
   badge.hidden = !badgeCount;
   badge.textContent = badgeCount;
   badge.title = badgeCount ? `当前榜单里你还有 ${badgeCount} 种没加新` : '';
+}
+
+/* ---------------------------------------------------------------- *
+ * TODO（待去找）清单：存在本机浏览器里，与是否绑定用户无关
+ *
+ * 从榜单卡片角上的「＋」加入；加入时顺手查该鸟种最近一份公开报告，
+ * 把「发现点 + 时间」存下来当「能找到的地址」（查不到就留空，不影响加入）。
+ * ---------------------------------------------------------------- */
+const TODO_KEY = 'birdreport.todo.v1';
+const todoList = loadTodo();
+
+function loadTodo() {
+  try {
+    const v = JSON.parse(localStorage.getItem(TODO_KEY));
+    return Array.isArray(v) ? v.filter((x) => x && x.taxonId) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function saveTodo() {
+  try {
+    localStorage.setItem(TODO_KEY, JSON.stringify(todoList));
+  } catch (e) { /* 隐私模式 / 存储不可用：忽略 */ }
+}
+const isTodo = (taxonId) => todoList.some((x) => Number(x.taxonId) === Number(taxonId));
+
+/** 轻提示：屏幕底部浮一条 1.8 秒的小条（加入 / 移除 TODO 等即时反馈都用它） */
+let toastTimer;
+function showToast(text) {
+  const el = $('toast');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+}
+
+/** 点卡片角上的「＋ / ★」：加入或移除 TODO */
+async function toggleTodo(taxonId, name) {
+  const id = Number(taxonId);
+  const idx = todoList.findIndex((x) => Number(x.taxonId) === id);
+  if (idx >= 0) {
+    todoList.splice(idx, 1);
+    saveTodo();
+    syncTodo();
+    showToast(`已从 TODO 移除：${name}`);
+    return;
+  }
+  const fromHot = (state.hot?.list || []).find((x) => Number(x.taxonId) === id) || {};
+  const item = {
+    taxonId: id,
+    name,
+    latin: fromHot.latin || '',
+    level: fromHot.chinaLevel || '',
+    point: '',
+    time: '',
+    at: Date.now(),
+  };
+  // 「能找到的地址」= 该鸟种最近一份公开报告的发现点（查询失败就留空，TODO 照样加得上）
+  try {
+    const r = await API('records', { ...currentWhere(), taxonid: id, page: 1, limit: 10 });
+    const rows = [...(r.list || [])].sort((a, b) => String(b.startTime || '').localeCompare(String(a.startTime || '')));
+    if (rows[0]) {
+      item.point = rows[0].pointName || '';
+      item.time = rows[0].startTime || '';
+    }
+  } catch (e) { /* 静默：没有地址也比没有 TODO 强 */ }
+  todoList.unshift(item);
+  saveTodo();
+  syncTodo();
+  showToast(`已加入我的 TODO：${name}${item.point ? ` · 最近发现：${item.point}` : ''}`);
+}
+
+/** 把榜单卡片上的「＋ / ★」同步到最新状态，并刷新「我的」里的入口与（可能开着的）列表页 */
+function syncTodo() {
+  for (const btn of document.querySelectorAll('#hotList .hc-todo')) {
+    btn.disabled = false; // 加入时的取地址请求可能把它临时禁用了，这里统一恢复
+    const on = isTodo(btn.dataset.todoId);
+    btn.classList.toggle('is-on', on);
+    btn.textContent = on ? '★' : '＋';
+    btn.title = on ? '已在 TODO（待去找），点击移除' : '加入 TODO（待去找）';
+  }
+  renderTodoEntry();
+  if (detail.open && detail.metric === 'todo') renderTodoList();
+}
+
+/** 「我的」里的 TODO 入口按钮：显示当前数量，点击打开列表页（见 openDetail('todo')） */
+function renderTodoEntry() {
+  const btn = $('btnMyTodo');
+  if (!btn) return;
+  btn.textContent = `我的 TODO（${todoList.length}）`;
+}
+
+/** TODO 列表页（弹层视图）：名称 + 能找到的地址；点条目看报告，点「删除」移除 */
+function renderTodoList() {
+  if (!todoList.length) {
+    $('detailSub').innerHTML = '';
+    $('detailBody').innerHTML =
+      '<div class="notice">清单是空的：在「本地稀有鸟种排行」的卡片上，点右上角的「＋」把鸟加进来，会自动带上最近的发现点。</div>';
+    return;
+  }
+  $('detailSub').innerHTML = `共 <strong>${fmt(todoList.length)}</strong> 种`;
+  $('detailBody').innerHTML =
+    '<div class="my-todo">' +
+    todoList
+      .map(
+        (x) => `<div class="todo-item" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}">
+      <div class="todo-main">
+        <div class="todo-name-row"><span class="todo-name">${esc(x.name)}</span>${x.level ? levelBadge({ chinaLevel: x.level }) : ''}</div>
+        <div class="todo-where">${x.point ? esc(`最近发现：${x.point}${x.time ? ' · ' + x.time.slice(5, 16) : ''}`) : '未取到近期发现点'}</div>
+      </div>
+      <button class="todo-del" type="button" data-del-id="${esc(x.taxonId)}" title="从 TODO 移除">删除</button>
+    </div>`
+      )
+      .join('') +
+    '</div>';
+}
+
+/** 「我的」里点「总鸟种数」→ 打开人生鸟种全列表（数据已在 state.liferInfo 里，零请求） */
+function openMyLiferList() {
+  const ll = state.liferInfo;
+  if (!ll || !ll.list) return;
+  closeMy();
+  openDetail('liferList');
+  // 关掉列表（×、Esc、‹ 返回都算）后回到「我的」面板，而不是落到主页面
+  detail.returnToMy = true;
+}
+
+/**
+ * 人生鸟种全列表：名称 + 学名 + 目科 + 保护等级徽章 + 「我记过 N 次」；
+ * 有疑问记录的种红名 + 「疑问 N」徽章（疑问数 = 你在这一种下被上游标疑的记录条数）。
+ */
+function renderLiferList() {
+  const ll = state.liferInfo;
+  if (!ll || !ll.list || !ll.list.length) {
+    $('detailSub').innerHTML = '';
+    $('detailBody').innerHTML = '<div class="notice">名单还没取到，回「我的」点一下「重新获取名单」。</div>';
+    return;
+  }
+  const rows = ll.list;
+  const doubts = rows.filter((x) => x.doubt).length;
+  // 副标题只保留「共 N 种 · x 种疑问」，其余说明文字不显示
+  $('detailSub').innerHTML =
+    `共 <strong>${fmt(ll.speciesCount)}</strong> 种` +
+    (doubts
+      ? ` · <span class="doubt-foot"><i class="doubt-dot"></i><strong>${fmt(doubts)}</strong> 种疑问</span>`
+      : '');
+  $('detailBody').innerHTML =
+    '<div class="rp-list">' +
+    rows
+      .map((x) => {
+        const badges =
+          levelBadge(x) + (x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : '') + iucnBadge(x.iucn);
+        const doubtBadge = x.doubt
+          ? `<span class="badge doubt" title="你在这一种下有 ${fmt(x.doubtCount)} 条记录被上游标疑">疑问 ${fmt(x.doubtCount)}</span>`
+          : '';
+        const nameCls = 'rp-name' + (x.doubt ? ' is-doubt' : '');
+        const sub = [x.order, x.family].filter(Boolean).join(' · ');
+        // 加新时间与地点（今年的才有）：地点只留最后一段（区县），别把「省 市 区」整串铺上来
+        const when = x.firstTime
+          ? `<span class="rp-when">加新 ${esc(x.firstTime)}${x.firstPlace ? ' · ' + esc(x.firstPlace.split(' ').slice(-1)[0]) : ''}</span>`
+          : '';
+        return `<div class="rp-item">
+        <div class="rp-main">
+          <div class="rp-name-row"><span class="${nameCls}">${esc(x.name)}</span>${doubtBadge}${badges}</div>
+          <div class="rp-latin">${esc(x.latin || '')}</div>
+          <div class="rp-sub">${sub ? esc(sub) + (when ? ' · ' : '') : ''}${when}</div>
+        </div>
+        <div class="rp-count"><b>${fmt(x.count)}</b><span>次</span></div>
+      </div>`;
+      })
+      .join('') +
+    '</div>';
 }
 
 /** 绑定：只校验「非空」，剩下的交给服务端去查真伪 */
@@ -726,7 +929,7 @@ function renderOverview(o, hot) {
   const recordCount = hot?.stat?.recordSum ?? o.recordCount;
   const cards = [
     { k: '记录鸟种数', v: taxonNum, u: '种', cls: 'accent-blue', metric: 'taxon' },
-    { k: '目 / 科', v: `${o.orderNum}`, u: `/ ${o.familyNum}`, cls: '' },
+    { k: '目 / 科', v: `${o.orderNum}`, u: `/ ${o.familyNum}`, cls: '', metric: 'orders' },
     { k: '观鸟报告数', v: o.reportNum, u: '份', cls: '', metric: 'report' },
     { k: '鸟种记录条数', v: recordCount, u: '条', cls: 'accent-green', metric: 'record' },
     { k: '公开报告', v: o.openReportNum, u: '份', cls: 'accent-orange', metric: 'open' },
@@ -835,22 +1038,31 @@ function renderHot(data) {
       const liferBadge = x.lifer
         ? `<span class="badge lifer" title="${esc(state.lifer)} 的人生鸟种里没有这一种">未加新</span>`
         : '';
+      // 「今天新来了」：昨天同一条件下没有它、今天出现的种（拿不到昨日清单时整块不渲染）
+      const newBadge = x.isNew
+        ? '<span class="badge isnew" title="昨天同一条件下没有它 · 今天新出现">新</span>'
+        : '';
       const cls = [
         'hot-card is-clickable',
         x.doubt ? 'is-doubt' : '',
         x.lifer ? 'is-lifer' : '',
       ].filter(Boolean).join(' ');
       const nameCls = ' class="cn' + (x.doubt ? ' is-doubt' : '') + (x.lifer ? ' is-lifer' : '') + '"';
+      // 角上的「＋ / ★」：把这一种加进「待去找」TODO（点击时顺手查最近发现点当地址）
+      const todoOn = isTodo(x.taxonId);
+      const todoBtn = `<button class="hc-todo${todoOn ? ' is-on' : ''}" type="button" data-todo-id="${esc(x.taxonId)}" data-todo-name="${esc(x.name)}"
+          title="${todoOn ? '已在 TODO（待去找），点击移除' : '加入 TODO（待去找）'}" aria-label="加入待去找清单">${todoOn ? '★' : '＋'}</button>`;
       // 卡片可点：点了弹出该鸟种的公开报告明细（点击时才查询，不预取）。
       // role/tabindex 与概览卡保持一致，键盘 Enter / 空格同样可用。
       return `<div class="${cls}" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}" data-lifer="${x.lifer ? '1' : '0'}" role="button" tabindex="0" aria-label="查看「${esc(x.name)}」出现在哪些公开报告">
+        ${todoBtn}
         <div class="hc-head">
           <span class="rank${rankCls}">${x.rank}</span>
           <span${nameCls}>${esc(x.name)}</span>
         </div>
         <div class="hc-latin">${esc(x.latin || '')}</div>
         <div class="hc-sub">${esc([x.order, x.family].filter(Boolean).join(' · '))}</div>
-        <div class="hc-badges">${badges}${liferBadge}${doubtBadge}</div>
+        <div class="hc-badges">${badges}${newBadge}${liferBadge}${doubtBadge}</div>
         <div class="hc-foot"><span class="n">${fmt(main)}</span><span class="l">${esc(mainLabel)}</span></div>
         <div class="hc-hist">${histLine}</div>
         <div class="bar-track hc-bar" title="历史稀有度 ${rar}%（按该地区最近两年记录数，越少越稀有）"><div class="bar-fill" style="width:${Math.max(2, rar)}%"></div></div>
@@ -879,10 +1091,16 @@ function renderHot(data) {
       liferInfo = `<span class="lifer-foot"><i class="lifer-dot"></i>当前榜单的鸟你（${esc(s.liferUser)}）都已加新</span>`;
     }
   }
+  // 「今天新来了」：单日查询才有（对比昨天）；拿不到昨日清单时 newComparable=false，整块不展示
+  const newInfo =
+    s.newComparable && Number(s.newCount)
+      ? `<span class="new-foot"><i class="new-dot"></i>今天新出现 <strong>${fmt(s.newCount)}</strong> 种（对比昨天）</span>`
+      : '';
   $('listFoot').innerHTML =
     `<span>本时段共 ${fmt(s.speciesCount ?? s.totalSpecies)} 种鸟 · 已全部展示` +
     (state.filter !== 'all' ? `（筛选：${$('selFilter').selectedOptions[0].textContent}）` : '') +
     `</span>` +
+    (newInfo ? `<span>${newInfo}</span>` : '') +
     (liferInfo ? `<span>${liferInfo}</span>` : '') +
     (doubtInfo ? `<span>${doubtInfo}</span>` : '') +
     `<span>${basis}（条形为稀有度）</span>`;
@@ -1148,6 +1366,12 @@ const METRICS = {
   open: { kind: 'report', title: '公开报告 · 报告明细' },
   // 点榜单卡片进来的：按单个鸟种收窄的报告明细。标题由调用方用 opts.title 覆盖成鸟种名。
   taxonReports: { kind: 'report', title: '报告明细' },
+  // 「目 / 科」概览卡的下钻：按当前榜单本地聚合，零请求、没有分页
+  orders: { kind: 'orders', title: '目 / 科构成（本榜单）' },
+  // 「我的」里点「总鸟种数」：人生鸟种全列表（数据就在 state.liferInfo 里，零请求）
+  liferList: { kind: 'liferList', title: '我的人生鸟种' },
+  // 「我的」里点「我的 TODO」按钮：待去找清单页（存在本机，零请求）
+  todo: { kind: 'todo', title: '待去找 · TODO' },
 };
 
 const detail = {
@@ -1192,8 +1416,10 @@ async function openDetail(metric, opts = {}) {
     pane: 'list',
     reportId: '',
     listTitle: opts.title || m.title,
+    returnToMy: false,
   });
 
+  $('detailModal').classList.remove('is-closing'); // 若赶上上一次的退场动画，取消它
   $('detailModal').hidden = false;
   document.body.style.overflow = 'hidden';
   $('detailTitle').textContent = opts.title || m.title;
@@ -1209,6 +1435,32 @@ async function openDetail(metric, opts = {}) {
   $('dSort').hidden = m.kind !== 'taxon';
   $('dPrev').disabled = true;
   $('dNext').disabled = true;
+
+  // 「目 / 科构成」完全来自当前榜单数据：不走接口、没有分页，也没有筛选工具
+  if (m.kind === 'orders') {
+    $('detailTools').hidden = true;
+    $('detailFoot').hidden = true;
+    renderOrders();
+    return;
+  }
+
+  // 「我的人生鸟种」：数据就在 state.liferInfo 里（打开「我的」时已取回），零请求
+  if (m.kind === 'liferList') {
+    $('btnDetailBack').hidden = false; // 返回 = 关掉列表并回到「我的」
+    $('detailTools').hidden = true;
+    $('detailFoot').hidden = true;
+    renderLiferList();
+    return;
+  }
+
+  // 「待去找 · TODO」：清单存在本机（localStorage），零请求
+  if (m.kind === 'todo') {
+    $('btnDetailBack').hidden = false; // 返回 = 关掉列表并回到「我的」
+    $('detailTools').hidden = true;
+    $('detailFoot').hidden = true;
+    renderTodoList();
+    return;
+  }
 
   await reloadDetail();
 }
@@ -1246,8 +1498,13 @@ async function reloadDetail() {
 
 function closeDetail() {
   detail.open = false;
-  $('detailModal').hidden = true;
+  hideAnimated($('detailModal')); // 播完退场动画再真正隐藏
   document.body.style.overflow = '';
+  // 从「我的」点进的「人生鸟种」列表：关掉（×、Esc、‹ 返回都算）就回到「我的」面板
+  if (detail.returnToMy) {
+    detail.returnToMy = false;
+    openMy();
+  }
 }
 
 function applyDetailFilter(resetPage) {
@@ -1340,8 +1597,8 @@ function taxonRow(x, no) {
 
 function reportRow(x, no, compact = false) {
   const span = x.startTime && x.endTime ? `${x.startTime.slice(5, 16)} ~ ${x.endTime.slice(11, 16)}` : '';
-  // 序列号不再直接外跳：点整行打开应用内的「报告详情」（详情里另给「记录中心原页」小链接）
-  const link = `<span class="rep-link" title="查看报告详情">${esc(x.serialId || '查看报告')} ›</span>`;
+  // 这一列只显示「查看」：点整行打开应用内的「报告详情」（编号在详情页里给出）
+  const link = `<span class="rep-link" title="查看报告详情">查看 ›</span>`;
   // 按单个鸟种收窄时只留「发现点 / 发现人 / 时间」：一份报告里往往有几十种鸟，
   // 「区县」和「鸟种数」在这个语境下不说明任何问题，反而把表撑宽。
   if (compact) {
@@ -1441,7 +1698,7 @@ async function openReport(reportId) {
   $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取报告…</p></div>';
   $('detailBody').scrollTop = 0;
   try {
-    const r = await API('report', { reportId, liferUser: state.lifer });
+    const r = await API('report', { reportId, liferUser: state.lifer, ...detail.where });
     // 期间可能已经点了「返回」或换了另一份报告：迟到的响应直接丢弃
     if (detail.pane !== 'report' || detail.reportId !== reportId) return;
     renderReport(r);
@@ -1482,11 +1739,13 @@ function renderReport(r) {
       const doubtBadge = x.doubt ? '<span class="badge doubt">疑问</span>' : '';
       const nameCls = 'rp-name' + (x.doubt ? ' is-doubt' : '') + (x.lifer && !x.doubt ? ' is-lifer' : '');
       const sub = [x.order, x.family].filter(Boolean).join(' · ');
+      // 「该地区近两年 N 条」——就在榜单的历史缓存里（零额外上游），拿不到就不显示
+      const hist = x.histCount === null || x.histCount === undefined ? '' : ` · 近两年 ${fmt(x.histCount)} 条`;
       return `<div class="rp-item">
         <div class="rp-main">
           <div class="rp-name-row"><span class="${nameCls}">${esc(x.name)}</span>${liferBadge}${doubtBadge}${badges}</div>
           <div class="rp-latin">${esc(x.latin || '')}</div>
-          <div class="rp-sub">${esc(sub)}${x.imageNum ? esc((sub ? ' · ' : '') + '图片 ' + x.imageNum) : ''}</div>
+          <div class="rp-sub">${esc(sub)}${x.imageNum ? esc((sub ? ' · ' : '') + '图片 ' + x.imageNum) : ''}${esc(hist)}</div>
         </div>
         <div class="rp-count"><b>${fmt(x.count)}</b><span>只</span></div>
       </div>`;
@@ -1504,6 +1763,44 @@ function renderReport(r) {
       ${r.note ? `<div class="rp-note">备注：${esc(r.note)}</div>` : ''}
     </div>
     <div class="rp-list">${items || '<div class="notice">这份报告没有鸟种明细。</div>'}</div>`;
+}
+
+/* ---------------------------------------------------------------- *
+ * 「目 / 科构成」：按当前榜单本地聚合（零请求、零分页）
+ * ---------------------------------------------------------------- */
+function renderOrders() {
+  const list = state.hot?.list || [];
+  if (!list.length) {
+    $('detailSub').innerHTML = '';
+    $('detailBody').innerHTML = '<div class="notice">先查询出榜单，再来看目 / 科构成。</div>';
+    return;
+  }
+  const map = new Map();
+  for (const x of list) {
+    const key = x.order || '未标注';
+    const g = map.get(key) || { order: key, n: 0, protectedN: 0, records: 0, families: new Set() };
+    g.n++;
+    if (x.chinaLevel) g.protectedN++;
+    g.records += Number(x.count) || 0;
+    if (x.family) g.families.add(x.family);
+    map.set(key, g);
+  }
+  const groups = [...map.values()].sort((a, b) => b.n - a.n || a.order.localeCompare(b.order, 'zh'));
+  const max = Math.max(...groups.map((g) => g.n), 1);
+  $('detailSub').innerHTML =
+    `本榜单共 <strong>${fmt(list.length)}</strong> 种，分属 <strong>${groups.length}</strong> 个目 · 本地聚合、零请求`;
+  $('detailBody').innerHTML =
+    '<div class="ord-list">' +
+    groups
+      .map(
+        (g) => `<div class="ord-item">
+      <div class="ord-name">${esc(g.order)}</div>
+      <div class="ord-bar-track"><i style="width:${Math.max(2, Math.round((g.n / max) * 100))}%"></i></div>
+      <div class="ord-num"><b>${fmt(g.n)}</b> 种 · ${g.families.size} 科${g.protectedN ? ` · 受保护 ${fmt(g.protectedN)}` : ''} · 记录 ${fmt(g.records)} 条</div>
+    </div>`
+      )
+      .join('') +
+    '</div>';
 }
 
 /* ---------------------------------------------------------------- *
@@ -1627,12 +1924,34 @@ function bind() {
     }
   });
   // 报告明细里点任意一行 / 报告编号 → 打开应用内的「报告详情」（不再跳记录中心；
-  // 详情页里保留一个「记录中心原页 ↗」小链接，要看照片等完整内容时再去）
+  // 详情页里保留一个「记录中心原页 ↗」小链接，要看照片等完整内容时再去）。
+  // 详情弹层里还承载 TODO 列表页：它的「删除」与「点条目看报告」也在这里处理。
   $('detailBody').addEventListener('click', (e) => {
+    const del = e.target.closest('.todo-del');
+    if (del && detail.metric === 'todo') {
+      const id = Number(del.dataset.delId);
+      const i = todoList.findIndex((x) => Number(x.taxonId) === id);
+      if (i >= 0) {
+        const [removed] = todoList.splice(i, 1);
+        saveTodo();
+        syncTodo(); // 会顺带重画正开着的 TODO 列表页
+        showToast(`已从 TODO 移除：${removed.name}`);
+      }
+      return;
+    }
+    const todoItem = e.target.closest('.todo-item[data-taxon-id]');
+    if (todoItem && detail.metric === 'todo') {
+      detail.returnToMy = false; // 去看报告，关掉后别弹回「我的」
+      openDetail('taxonReports', { title: `${todoItem.dataset.taxonName} · 报告明细`, where: { taxonid: todoItem.dataset.taxonId } });
+      return;
+    }
     const tr = e.target.closest('tr[data-report-id]');
     if (tr && tr.dataset.reportId) openReport(tr.dataset.reportId);
   });
-  $('btnDetailBack').addEventListener('click', closeReport);
+  $('btnDetailBack').addEventListener('click', () => {
+    if (detail.pane === 'report') closeReport();
+    else closeDetail(); // orders / liferList 这类顶层视图：返回 = 关闭（liferList 会自动回「我的」）
+  });
 
   $('selFilter').addEventListener('change', (e) => {
     state.filter = e.target.value;
@@ -1674,10 +1993,19 @@ function bind() {
     });
   };
   $('hotList').addEventListener('click', (e) => {
+    // 角上的「＋ / ★」是 TODO 按钮：把这一种加入 / 移出「待去找」，不打开报告弹层
+    const todoBtn = e.target.closest('.hc-todo');
+    if (todoBtn) {
+      if (todoBtn.disabled) return;
+      todoBtn.disabled = true; // 取地址期间防连点；syncTodo 会恢复
+      toggleTodo(todoBtn.dataset.todoId, todoBtn.dataset.todoName);
+      return;
+    }
     openTaxonReports(e.target.closest('.hot-card[data-taxon-id]'));
   });
   $('hotList').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target.closest('.hc-todo')) return; // 按钮自己的 Enter/空格走 click
     const card = e.target.closest('.hot-card[data-taxon-id]');
     if (card) {
       e.preventDefault();
@@ -1736,17 +2064,25 @@ function bind() {
       doBindLifer();
     }
   });
+  // 「我的」里点「总鸟种数」→ 人生鸟种全列表
+  $('myStats').addEventListener('click', (e) => {
+    if (e.target.closest('#myTaxonCell')) openMyLiferList();
+  });
+  // 「我的」里的 TODO 入口按钮：点开列表页；关闭（× / Esc / ‹ 返回）自动回「我的」
+  $('btnMyTodo').addEventListener('click', () => {
+    closeMy();
+    openDetail('todo');
+    detail.returnToMy = true;
+  });
+  // 「我的」里的弹出动画选择：立即生效并记住，给一条提示
+  $('selAnim').addEventListener('change', (e) => {
+    setAnim(e.target.value);
+    showToast(`弹出动画：${ANIM_LABELS[animType] || animType}`);
+  });
   $('btnLiferUnbind').addEventListener('click', () => {
     setLifer('');
     showMyMsg('已取消绑定。');
     // 榜单上的青色标记要跟着撤掉，所以重查一次
-    runQuery();
-  });
-  // 「只看未加新」：等价于把榜单的筛选切成 lifer，然后回到榜单看结果
-  $('btnMyShowNew').addEventListener('click', () => {
-    state.filter = 'lifer';
-    $('selFilter').value = 'lifer';
-    closeMy();
     runQuery();
   });
   // 「重新获取名单」：只忽略人生鸟种缓存（服务端 liferNocache），地区榜单照旧复用
