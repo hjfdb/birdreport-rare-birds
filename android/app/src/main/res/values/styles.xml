@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      App 主题：Theme.DeviceDefault —— 跟随手机当前的系统主题。
+
+      网页里的下拉（省 / 市 / 区县 / 筛选 / 排序）和日期框，点击后弹出的是
+      **系统组件**画的对话框，外观由 App 主题决定。之前的 Theme.Material 是
+      2014 年那套旧 Material 样式，在现在的手机上显得很老；换成 DeviceDefault
+      后，对话框直接用手机自己的新样式（Android 12+ 是 Material You），
+      旧机型则保持与该机型一致的原生样式。
+
+      ▸ 只用框架自带资源，**不引入任何第三方依赖**；
+      ▸ Theme.DeviceDefault 从 API 21 起就有，minSdk 24 完全覆盖。
+      ▸ 状态栏压成白色 + 深色图标，与网页顶栏连成一片（windowLightStatusBar 需要 API 23+）。
+    -->
+    <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
+</resources>

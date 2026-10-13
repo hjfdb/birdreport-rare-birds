@@ -10,7 +10,7 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/AppTheme">
         <!--
           明文 HTTP 的口子**只通过 networkSecurityConfig 开**（只放 127.0.0.1 / localhost）。
           这里刻意**不写** android:usesCleartextTraffic="true"：那个开关是「一刀切放开」，
