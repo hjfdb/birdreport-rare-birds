@@ -137,6 +137,24 @@ function showLoading(text) {
   $('loading').classList.remove('is-closing');
   $('loading').hidden = false;
 }
+
+/**
+ * 错误提示统一出口。上游限流（code 505 / 405）时给一条可操作的出路：
+ * 记录中心的验证码是**按 IP 记的**（验证码图片接口实测无 Set-Cookie），
+ * 同一网络下过一次验证码，本机服务端的请求会一起解封；不想看验证码也可以等几分钟。
+ */
+const CAPTCHA_URL = 'https://www.birdreport.cn/home/code/verify.html';
+function errNoticeHtml(prefix, message) {
+  const msg = String(message || '');
+  if (/code\s*(505|405)/.test(msg)) {
+    return (
+      `<div class="notice error">${esc(prefix)}${esc(msg)}<br />` +
+      `被记录中心限流了：去<a href="${CAPTCHA_URL}" target="_blank" rel="noreferrer">输入一次验证码</a>即可解封` +
+      `（同一网络下通用，不用等），或过几分钟再试。</div>`
+    );
+  }
+  return `<div class="notice error">${esc(prefix)}${esc(msg)}</div>`;
+}
 function hideLoading() {
   hideAnimated($('loading'), 180);
 }
@@ -1305,7 +1323,7 @@ async function runQuery() {
     } else {
       console.error(e);
       setStatus('err', '查询失败');
-      $('hotList').innerHTML = `<div class="notice error">查询失败：${esc(e.message)}</div>`;
+      $('hotList').innerHTML = errNoticeHtml('查询失败：', e.message);
     }
   } finally {
     finishLoading();
@@ -1491,7 +1509,7 @@ async function reloadDetail() {
       applyDetailFilter(false);
     }
   } catch (e) {
-    $('detailBody').innerHTML = `<div class="notice error">读取明细失败：${esc(e.message)}</div>`;
+    $('detailBody').innerHTML = errNoticeHtml('读取明细失败：', e.message);
     $('dPageInfo').textContent = '';
   }
 }
@@ -1704,7 +1722,7 @@ async function openReport(reportId) {
     renderReport(r);
   } catch (e) {
     if (detail.pane !== 'report' || detail.reportId !== reportId) return;
-    $('detailBody').innerHTML = `<div class="notice error">读取报告失败：${esc(e.message)}</div>`;
+    $('detailBody').innerHTML = errNoticeHtml('读取报告失败：', e.message);
   }
 }
 

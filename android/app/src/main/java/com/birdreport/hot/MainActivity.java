@@ -1,6 +1,7 @@
 package com.birdreport.hot;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -10,6 +11,8 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -64,6 +67,31 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setCacheMode(WebSettings.LOAD_NO_CACHE); // 服务端已声明 no-store
+        s.setSupportMultipleWindows(true); // 配合下面的 onCreateWindow：target=_blank 的链接去系统浏览器
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
+        // 页面里 target=_blank 的链接（记录中心原页、505 时的「输入验证码」页……）用**系统浏览器**
+        // 打开：WebView 默认不新开窗口，不接管的话这些链接在 APK 里点了没反应。
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
+                WebView tmp = new WebView(MainActivity.this);
+                tmp.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl()));
+                        } catch (Exception ignored) {
+                            // 设备上没有可用浏览器：静默失败，别把 App 带崩
+                        }
+                        return true;
+                    }
+                });
+                WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
+                transport.setWebView(tmp);
+                resultMsg.sendToTarget();
+                return true;
+            }
+        });
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
