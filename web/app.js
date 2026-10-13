@@ -501,6 +501,202 @@ function closeMy() {
   hideAnimated($('myModal')); // 播完退场动画再真正隐藏
 }
 
+/**
+ * 图片查看器：报告详情里点「图片 N」时弹出，图片是记录中心 OSS 的直链
+ * （服务端已把 http 换成 https，APK 的明文策略下也能加载）。
+ */
+async function openPhotos(activityId, taxonId, name) {
+  const pv = $('photoViewer');
+  pv.classList.remove('is-closing');
+  pv.hidden = false;
+  $('pvTitle').textContent = name ? `${name} · 记录图片` : '记录图片';
+  $('pvBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取图片…</p></div>';
+  $('pvBody').scrollTop = 0;
+  try {
+    const r = await API('report-images', { activityId, taxonId });
+    const list = r.list || [];
+    if (!list.length) {
+      $('pvBody').innerHTML = '<div class="notice">这份报告里没有这一种的图片（可能已被记录人删除）。</div>';
+      return;
+    }
+    $('pvBody').innerHTML = list
+      .map((u, i) => `<img class="pv-img" src="${esc(u)}" alt="${esc(name || '')} 图片 ${i + 1}" loading="lazy" />`)
+      .join('');
+  } catch (e) {
+    $('pvBody').innerHTML = errNoticeHtml('读取图片失败：', e.message);
+  }
+}
+function closePhotos() {
+  hideAnimated($('photoViewer'), 200);
+}
+
+/* ---------------------------------------------------------------- *
+ * 图片查看器的缩放：双指捏合 / 拖动 / 双击（桌面：Ctrl+滚轮 / 双击）
+ *
+ * 每张图的状态直接挂在元素上（el._pz = {s, tx, ty}），互不影响；
+ * 变换是 translate(tx,ty) scale(s)，origin 在中心 —— 捏合时让双指中点
+ * 保持不动，是这类手势的标准做法。未放大时 touch-action: pan-y 让
+ * 单指纵向滚动照常走浏览器；放大后切成 none，拖动交给这里。
+ * ---------------------------------------------------------------- */
+const PV_MAX_SCALE = 5;
+function pvApply(el) {
+  const z = el._pz;
+  const plain = z.s <= 1.001 && Math.abs(z.tx) < 0.5 && Math.abs(z.ty) < 0.5;
+  el.style.transform = plain ? '' : `translate(${z.tx.toFixed(1)}px, ${z.ty.toFixed(1)}px) scale(${z.s.toFixed(3)})`;
+  el.style.touchAction = z.s > 1 ? 'none' : 'pan-y';
+}
+/** 以 (x,y) 为锚点缩放到 s：缩放前后锚点下的图像内容保持不动 */
+function pvScaleTo(el, s, x, y) {
+  if (!el._pz) el._pz = { s: 1, tx: 0, ty: 0 };
+  const z = el._pz;
+  const r = el.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  s = Math.min(PV_MAX_SCALE, Math.max(1, s));
+  const k = s / z.s;
+  let tx = x - cx - (x - cx - z.tx) * k;
+  let ty = y - cy - (y - cy - z.ty) * k;
+  const limX = (el.offsetWidth * (s - 1)) / 2;
+  const limY = (el.offsetHeight * (s - 1)) / 2;
+  z.s = s;
+  z.tx = Math.max(-limX, Math.min(limX, tx));
+  z.ty = Math.max(-limY, Math.min(limY, ty));
+  pvApply(el);
+}
+/** 双击：没放大 → 放大到 2.5 倍（以双击点为锚）；已放大 → 复位 */
+function pvToggle(el, x, y) {
+  if (!el._pz) el._pz = { s: 1, tx: 0, ty: 0 };
+  el.classList.add('pv-smooth');
+  setTimeout(() => el.classList.remove('pv-smooth'), 240);
+  if (el._pz.s > 1.02) {
+    el._pz = { s: 1, tx: 0, ty: 0 };
+    pvApply(el);
+  } else {
+    pvScaleTo(el, 2.5, x, y);
+  }
+}
+const pvDist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+const pvMid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+/** 给图片查看器装手势（在 bind() 里调一次即可；事件委托到 pvBody） */
+function bindPhotoZoom() {
+  const body = $('pvBody');
+  const imgOf = (t) => (t && t.closest ? t.closest('.pv-img') : null);
+  let g = null; // 当前手势：pinch / pan
+
+  body.addEventListener('touchstart', (e) => {
+    const el = imgOf(e.target);
+    if (!el) return;
+    if (!el._pz) el._pz = { s: 1, tx: 0, ty: 0 };
+    el.classList.remove('pv-smooth');
+    if (e.touches.length === 2) {
+      g = { mode: 'pinch', el, d0: pvDist(e.touches), m0: pvMid(e.touches), s0: el._pz.s, tx0: el._pz.tx, ty0: el._pz.ty };
+      el.style.touchAction = 'none'; // 本次手势别让浏览器做别的
+    } else if (e.touches.length === 1) {
+      // 单指先记成「可能的点按」；是否算点按要等 touchend 看有没有移动过
+      //（不然拖动的起手会被当成一次点按，跟后面的点击凑成假双击）
+      const x = e.touches[0].clientX;
+      const y = e.touches[0].clientY;
+      g = { mode: 'tap', el, m0: { x, y }, tx0: el._pz.tx, ty0: el._pz.ty, moved: false, pan: el._pz.s > 1 };
+    }
+  }, { passive: true });
+
+  body.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && (!g || g.mode !== 'pinch')) {
+      const el = imgOf(e.target);
+      if (!el) return;
+      if (!el._pz) el._pz = { s: 1, tx: 0, ty: 0 };
+      g = { mode: 'pinch', el, d0: pvDist(e.touches), m0: pvMid(e.touches), s0: el._pz.s, tx0: el._pz.tx, ty0: el._pz.ty };
+    }
+    if (!g) return;
+    const el = g.el;
+    const z = el._pz;
+    if (g.mode === 'tap') {
+      const m = e.touches[0];
+      if (!m) return;
+      const dx = m.clientX - g.m0.x;
+      const dy = m.clientY - g.m0.y;
+      if (!g.moved && Math.hypot(dx, dy) < 8) return; // 还没过判定阈值
+      g.moved = true;
+      if (!g.pan) return; // 未放大：单指让浏览器滚动，不接管
+      g.mode = 'pan';
+    }
+    e.preventDefault(); // 手势由我们接管，别让页面跟着滚动
+    if (g.mode === 'pinch') {
+      const d = pvDist(e.touches);
+      const m = pvMid(e.touches);
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const s = Math.min(PV_MAX_SCALE, Math.max(1, (g.s0 * d) / (g.d0 || 1)));
+      const k = s / g.s0;
+      let tx = m.x - cx - (g.m0.x - cx - g.tx0) * k;
+      let ty = m.y - cy - (g.m0.y - cy - g.ty0) * k;
+      const limX = (el.offsetWidth * (s - 1)) / 2;
+      const limY = (el.offsetHeight * (s - 1)) / 2;
+      z.s = s;
+      z.tx = Math.max(-limX, Math.min(limX, tx));
+      z.ty = Math.max(-limY, Math.min(limY, ty));
+      pvApply(el);
+    } else if (g.mode === 'pan') {
+      const m = e.touches[0];
+      const limX = (el.offsetWidth * (z.s - 1)) / 2;
+      const limY = (el.offsetHeight * (z.s - 1)) / 2;
+      z.tx = Math.max(-limX, Math.min(limX, g.tx0 + m.clientX - g.m0.x));
+      z.ty = Math.max(-limY, Math.min(limY, g.ty0 + m.clientY - g.m0.y));
+      pvApply(el);
+    }
+  }, { passive: false });
+
+  body.addEventListener('touchend', (e) => {
+    if (!g) return;
+    if (g.mode === 'pinch') {
+      if (e.touches.length < 2) {
+        // 捏回原大小时归位，避免留下一丁点歪斜
+        const el = g.el;
+        if (el._pz.s <= 1.02) {
+          el._pz = { s: 1, tx: 0, ty: 0 };
+        }
+        pvApply(el);
+        g = null;
+      }
+      return;
+    }
+    if (g.mode === 'tap' && !g.moved && e.touches.length === 0) {
+      // 真正的点按：距上一次点按 320ms 内 → 双击（放大 / 复位）
+      const el = g.el;
+      const now = Date.now();
+      if (el._lastTap && now - el._lastTap < 320) {
+        el._lastTap = 0;
+        // 触摸双击后浏览器还会补发一个 dblclick（鼠标事件合成）：
+        // 打个标记让 dblclick 处理器别再切一次，不然等于切了两次 = 没切
+        el._pzNoDbl = now;
+        pvToggle(el, g.m0.x, g.m0.y);
+      } else {
+        el._lastTap = now;
+      }
+      g = null;
+      return;
+    }
+    if (e.touches.length === 0) g = null; // 拖动 / 移动过的手势收尾
+  }, { passive: true });
+
+  // 桌面：双击放大 / Ctrl+滚轮缩放（普通滚轮仍是滚动列表）
+  body.addEventListener('dblclick', (e) => {
+    const el = imgOf(e.target);
+    if (!el) return;
+    // 触摸双击已处理过的，忽略它合成的这次 dblclick
+    if (el._pzNoDbl && Date.now() - el._pzNoDbl < 450) return;
+    pvToggle(el, e.clientX, e.clientY);
+  });
+  body.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    const el = imgOf(e.target);
+    if (!el) return;
+    e.preventDefault();
+    pvScaleTo(el, (el._pz?.s || 1) * (e.deltaY < 0 ? 1.18 : 1 / 1.18), e.clientX, e.clientY);
+  }, { passive: false });
+}
+
 /** 取回绑定用户的人生鸟种（面板里的「我目前的记录」就是它） */
 async function loadMyLifelist(nocache = false) {
   if (!state.lifer) return;
@@ -1533,6 +1729,12 @@ function closeDetail() {
  * 报告详情 → 回明细列表；从「我的」进的列表 → 回「我的」（closeDetail 里已有）。
  * ---------------------------------------------------------------- */
 window.__birdHandleBack = () => {
+  // 图片查看器在最上层
+  const pv = $('photoViewer');
+  if (pv && !pv.hidden) {
+    closePhotos();
+    return true;
+  }
   const dm = $('detailModal');
   if (detail.open && dm && !dm.hidden) {
     if (detail.pane === 'report') {
@@ -1784,11 +1986,17 @@ function renderReport(r) {
       const sub = [x.order, x.family].filter(Boolean).join(' · ');
       // 「该地区近两年 N 条」——就在榜单的历史缓存里（零额外上游），拿不到就不显示
       const hist = x.histCount === null || x.histCount === undefined ? '' : ` · 近两年 ${fmt(x.histCount)} 条`;
+      // 有图才显示图片按钮：点开是这一种在这份报告里的照片（OSS 直链）
+      const imgBtn = x.imageNum
+        ? ` <button class="rp-img-btn" type="button" data-img-act="${esc(r.activityId || '')}" data-img-taxon="${esc(x.taxonId)}" data-img-name="${esc(x.name)}" title="查看图片">` +
+          '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="2"></circle><path d="M21 15l-5-5-9 9"></path></svg>' +
+          `图片 ${x.imageNum}</button>`
+        : '';
       return `<div class="rp-item">
         <div class="rp-main">
           <div class="rp-name-row"><span class="${nameCls}">${esc(x.name)}</span>${liferBadge}${doubtBadge}${badges}</div>
           <div class="rp-latin">${esc(x.latin || '')}</div>
-          <div class="rp-sub">${esc(sub)}${x.imageNum ? esc((sub ? ' · ' : '') + '图片 ' + x.imageNum) : ''}${esc(hist)}</div>
+          <div class="rp-sub">${esc(sub)}${imgBtn}${esc(hist)}</div>
         </div>
         <div class="rp-count"><b>${fmt(x.count)}</b><span>只</span></div>
       </div>`;
@@ -1970,6 +2178,12 @@ function bind() {
   // 详情页里保留一个「记录中心原页 ↗」小链接，要看照片等完整内容时再去）。
   // 详情弹层里还承载 TODO 列表页：它的「删除」与「点条目看报告」也在这里处理。
   $('detailBody').addEventListener('click', (e) => {
+    // 报告详情里的「图片 N」：打开图片查看器
+    const imgBtn = e.target.closest('.rp-img-btn');
+    if (imgBtn) {
+      openPhotos(imgBtn.dataset.imgAct, imgBtn.dataset.imgTaxon, imgBtn.dataset.imgName);
+      return;
+    }
     const del = e.target.closest('.todo-del');
     if (del && detail.metric === 'todo') {
       const id = Number(del.dataset.delId);
@@ -2061,6 +2275,12 @@ function bind() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    // 图片查看器在最上层，先关它
+    const pv = $('photoViewer');
+    if (pv && !pv.hidden) {
+      closePhotos();
+      return;
+    }
     // 「我的」面板在 DOM 里排在明细弹层之后（层级更高），所以先关它
     if (!$('myModal').hidden) {
       closeMy();
@@ -2111,6 +2331,12 @@ function bind() {
   $('myStats').addEventListener('click', (e) => {
     if (e.target.closest('#myTaxonCell')) openMyLiferList();
   });
+  // 图片查看器：点 × 或点图片以外的任何地方关闭；图片支持双指缩放 / 拖动 / 双击
+  $('pvClose').addEventListener('click', closePhotos);
+  $('photoViewer').addEventListener('click', (e) => {
+    if (!e.target.closest('.pv-img')) closePhotos();
+  });
+  bindPhotoZoom();
   // 「我的」里的 TODO 入口按钮：点开列表页；关闭（× / Esc / ‹ 返回）自动回「我的」
   $('btnMyTodo').addEventListener('click', () => {
     closeMy();

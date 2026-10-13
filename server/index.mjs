@@ -36,6 +36,7 @@ import {
   getActivity,
   getActivityTaxons,
   getMemberTimeline,
+  getReportTaxonImages,
 } from './birdreport.mjs';
 import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
@@ -1611,6 +1612,7 @@ const routes = {
         return {
           reportId,
           serialId: info.serialId || '',
+          activityId: Number(info.id) || 0, // 数字 id：取记录图片（reportTaxonImage）要用它
           point: info.pointName || loc.point || '',
           province: loc.province,
           city: loc.city,
@@ -1651,6 +1653,29 @@ const routes = {
       payload.lifer = lifer.info;
     }
     return payload;
+  },
+
+  // 单份报告里某个鸟种的记录图片（报告详情里点「图片 N」时用）。
+  // 上游返回 {image_url} 列表（OSS 签名直链，明文不加密）。这里统一把 http 换成 https：
+  // 该 OSS 两种协议都能取（实测同样 200 同字节），而 APK 的明文策略只放行回环地址，
+  // http 的图在 WebView 里会加载不出来。
+  async 'GET /api/report-images'(q) {
+    const activityId = Number(q.get('activityId')) || 0;
+    const taxonId = Number(q.get('taxonId')) || 0;
+    if (!activityId || !taxonId) throw new HttpError(400, '缺少 activityId / taxonId');
+    const { value, meta } = await cached(
+      `report-image|${activityId}|${taxonId}`,
+      async () => {
+        const r = await getReportTaxonImages(activityId, taxonId);
+        const list = (Array.isArray(r.data) ? r.data : [])
+          .map((x) => String(x.image_url || ''))
+          .filter(Boolean)
+          .map((u) => u.replace(/^http:\/\//i, 'https://'));
+        return { count: Number(r.count) || list.length, list };
+      },
+      q.get('nocache') === '1'
+    );
+    return { ...value, cache: meta };
   },
 
   // 逐月趋势

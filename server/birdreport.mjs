@@ -201,6 +201,13 @@ export const getMemberTimeline = (memberId) =>
   api('/front/record/year/taxon/member/timeline', { member_id: memberId });
 
 /**
+ * 单份报告里某个鸟种的记录图片（站点报告页「图片」列点开的内容）。
+ * @param activityId 报告的数字 id（activity/get 的 id 字段）
+ */
+export const getReportTaxonImages = (activityId, taxonId) =>
+  api('/front/member/image/reportTaxonImage', { report_id: activityId, taxon_id: taxonId });
+
+/**
  * 鸟种保护等级（国家重点保护 / IUCN / 中国生物多样性红色名录 / 是否中国特有）
  * @returns {Promise<{taxon_id:number, china_level?:string, iucn?:string, china_iucn?:string, is_china?:string}>}
  */

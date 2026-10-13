@@ -484,6 +484,7 @@ input[type="search"] { min-width: 200px; }
 .modal-mask.is-closing { animation: maskOut .16s ease-in forwards; }
 .modal-mask.is-closing .modal { animation: modalOut .18s ease-in forwards; }
 .loading-mask.is-closing { animation: maskOut .15s ease-in forwards; }
+.photo-viewer.is-closing { animation: maskOut .16s ease-in forwards; }
 
 /* 其它动效类型：以 <html> 上的 anim-* 类覆盖默认 */
 html.anim-zoom .modal { animation: zoomIn .2s ease-out; }
@@ -494,10 +495,10 @@ html.anim-slide .modal { animation: slideIn .24s cubic-bezier(.2, .85, .3, 1); }
 html.anim-slide .modal-mask.is-closing .modal { animation: slideOut .18s ease-in forwards; }
 html.anim-bounce .modal { animation: bounceIn .34s ease; }
 html.anim-bounce .modal-mask.is-closing .modal { animation: bounceOut .17s ease-in forwards; }
-html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask { animation: none; }
+html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask, html.anim-none .photo-viewer { animation: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .modal-mask, .modal, .loading-mask { animation: none; }
+  .modal-mask, .modal, .loading-mask, .photo-viewer { animation: none; }
   .toast { transition: none; }
 }
 
@@ -581,6 +582,40 @@ html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask 
 .rp-latin { font-size: 11.5px; color: var(--muted); font-style: italic; margin-top: 1px; }
 .rp-sub { font-size: 11.5px; color: var(--text-2); margin-top: 1px; }
 .rp-when { color: #0a6570; }
+/* 报告详情里「图片 N」按钮：有图才出现，点击打开图片查看器 */
+.rp-img-btn {
+  display: inline-flex; align-items: center; gap: 3px; margin: 0 4px; padding: 1px 7px;
+  border: 1px solid #b6e0e3; border-radius: 10px; background: var(--lifer-soft);
+  color: #0a6570; font-size: 11px; font-family: inherit; cursor: pointer; vertical-align: baseline;
+}
+.rp-img-btn:hover { border-color: var(--lifer); }
+
+/* ---------------- 图片查看器（报告详情「图片 N」弹出） ---------------- */
+.photo-viewer {
+  position: fixed; inset: 0; z-index: 80; background: rgba(15, 23, 42, .94);
+  display: flex; flex-direction: column;
+  height: 100vh; height: var(--vvh, 100vh);
+  animation: maskIn .18s ease-out;
+}
+.photo-viewer[hidden] { display: none; }
+.photo-viewer.is-closing { animation: maskOut .16s ease-in forwards; }
+.pv-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; color: #fff; }
+.pv-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-close {
+  flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(255, 255, 255, .08); color: #fff; font-size: 18px; line-height: 1; cursor: pointer;
+}
+.pv-close:hover { background: rgba(255, 255, 255, .18); }
+.pv-body { flex: 1; overflow: auto; padding: 0 12px 20px; min-height: 0; }
+.pv-body .detail-loading { color: rgba(255, 255, 255, .75); }
+.pv-body .notice { background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .18); color: #e8edf5; }
+.pv-img {
+  display: block; width: 100%; max-width: 900px; margin: 0 auto 12px; border-radius: 10px;
+  background: rgba(255, 255, 255, .06);
+  touch-action: pan-y; /* 未放大时交给浏览器纵向滚动；双指捏合留给 JS 缩放（见 app.js） */
+  user-select: none; -webkit-user-drag: none;
+}
+.pv-img.pv-smooth { transition: transform .18s ease; }
 .rp-count { flex: none; text-align: right; min-width: 44px; }
 .rp-count b { font-size: 17px; font-variant-numeric: tabular-nums; }
 .rp-count span { font-size: 11px; color: var(--muted); margin-left: 2px; }
