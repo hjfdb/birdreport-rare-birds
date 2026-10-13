@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 桌面图标底色，与网页端主色一致 -->
-    <color name="ic_launcher_background">#2f7fd6</color>
+    <!-- 自适应图标的底层色：与图标插画边缘的青绿一致（圆形遮罩外的一圈靠它补齐） -->
+    <color name="ic_launcher_background">#24d6cf</color>
 </resources>
