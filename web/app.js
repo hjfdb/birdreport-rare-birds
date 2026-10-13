@@ -1525,6 +1525,31 @@ function closeDetail() {
   }
 }
 
+/* ---------------------------------------------------------------- *
+ * Android 返回（手势侧滑 / 返回键）→ 先关弹层
+ *
+ * APK 的 MainActivity 收到返回时先调这个函数：有弹层就关掉它并返回 true；
+ * 什么都没有返回 false，交回系统（WebView 历史后退 / 退出 App）。
+ * 报告详情 → 回明细列表；从「我的」进的列表 → 回「我的」（closeDetail 里已有）。
+ * ---------------------------------------------------------------- */
+window.__birdHandleBack = () => {
+  const dm = $('detailModal');
+  if (detail.open && dm && !dm.hidden) {
+    if (detail.pane === 'report') {
+      closeReport(); // 报告详情：返回 = 回明细列表
+      return true;
+    }
+    closeDetail();
+    return true;
+  }
+  const mm = $('myModal');
+  if (mm && !mm.hidden) {
+    closeMy();
+    return true;
+  }
+  return false;
+};
+
 function applyDetailFilter(resetPage) {
   const kw = detail.q.trim().toLowerCase();
   let rows = detail.rows;

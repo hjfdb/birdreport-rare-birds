@@ -217,8 +217,28 @@ public class MainActivity extends Activity {
      * 生命周期
      * ---------------------------------------------------------------- */
 
+    /**
+     * 返回（手势侧滑 / 返回键）先在页面里走一层：弹层（「我的」/ 明细 / 报告详情 /
+     * TODO 列表）开着就关掉它；页面返回 false 才轮到 WebView 历史，最后才退出 App。
+     */
     @Override
     public void onBackPressed() {
+        if (web == null) {
+            super.onBackPressed();
+            return;
+        }
+        web.evaluateJavascript(
+                "(window.__birdHandleBack && window.__birdHandleBack()) ? '1' : '0'",
+                value -> {
+                    if ("1".equals(value)) {
+                        return; // 页面自己消费了这次返回（关掉了弹层）
+                    }
+                    defaultBack();
+                });
+    }
+
+    /** 页面没东西可关时的默认返回：先退 WebView 历史，再退出 App */
+    private void defaultBack() {
         if (web != null && web.canGoBack()) {
             web.goBack();
         } else {
