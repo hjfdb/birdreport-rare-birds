@@ -186,6 +186,13 @@ export const getDistrictChart = (params) => api('/front/province/summary/chartDi
 export const searchRecords = (where, { limit = 20, page = 1 } = {}) =>
   api('/front/record/activity/search', { ...where, page, limit });
 
+/** 单份观鸟报告的基本信息（观鸟点 / 时段 / 记录人 / 备注等），按 reportId 查 */
+export const getActivity = (reportId) => api('/front/activity/get', { reportId });
+
+/** 单份观鸟报告的鸟种清单（含数量与是否被上游标疑），一次取全 */
+export const getActivityTaxons = (reportId) =>
+  api('/front/activity/taxon', { reportId, page: 1, limit: 1500 });
+
 /**
  * 鸟种保护等级（国家重点保护 / IUCN / 中国生物多样性红色名录 / 是否中国特有）
  * @returns {Promise<{taxon_id:number, china_level?:string, iucn?:string, china_iucn?:string, is_china?:string}>}

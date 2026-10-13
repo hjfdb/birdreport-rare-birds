@@ -69,26 +69,20 @@
       </div>
 
       <!-- 记录检索：按观鸟点 / 记录人 / 鸟种收窄，三个条件都会同时作用于概览、榜单与报告明细；查询按钮也放在这一行 -->
-      <div class="quick-row record-filter-row">
-        <span class="quick-label">记录检索</span>
-        <div class="field field-inline">
-          <label for="inpPoint">观测地点</label>
-          <input type="text" id="inpPoint" list="dlPoint" placeholder="观鸟点关键字，如：奥森" autocomplete="off" />
-          <datalist id="dlPoint"></datalist>
-        </div>
-        <div class="field field-inline">
-          <label for="inpUser">用户名称</label>
-          <input type="text" id="inpUser" list="dlUser" placeholder="记录人，如：kkia" autocomplete="off" />
-          <datalist id="dlUser"></datalist>
-        </div>
-        <div class="field field-inline">
-          <label for="inpTaxonName">鸟种名称</label>
-          <input type="text" id="inpTaxonName" list="dlTaxon" placeholder="中文名 / 学名，如：灰喜鹊" autocomplete="off" />
-          <datalist id="dlTaxon"></datalist>
-        </div>
-        <button class="btn btn-mini" id="btnResetFilters" title="清空观测地点 / 用户名称 / 鸟种名称">清空检索</button>
-        <button class="btn btn-primary" id="btnQuery">查询</button>
+      <div class="field field-inline">
+        <label for="inpPoint">观测地点</label>
+        <input type="text" id="inpPoint" placeholder="观鸟点关键字，如：奥森" autocomplete="off" />
       </div>
+      <div class="field field-inline">
+        <label for="inpUser">用户名称</label>
+        <input type="text" id="inpUser" placeholder="记录人，如：kkia" autocomplete="off" />
+      </div>
+      <div class="field field-inline">
+        <label for="inpTaxonName">鸟种名称</label>
+        <input type="text" id="inpTaxonName" placeholder="中文名 / 学名，如：灰喜鹊" autocomplete="off" />
+      </div>
+      <button class="btn btn-mini" id="btnResetFilters" title="清空观测地点 / 用户名称 / 鸟种名称">清空检索</button>
+      <button class="btn btn-primary" id="btnQuery">查询</button>
       <div class="filter-hint" id="filterHint" hidden></div>
     </section>
 
@@ -154,19 +148,6 @@
       </aside>
     </div>
 
-    <!-- 物种检索 -->
-    <section class="panel">
-      <div class="panel-head">
-        <h2>按鸟种查看保护等级（郑四名录）</h2>
-      </div>
-      <div class="search-row">
-        <input type="search" id="inpTaxon"
-          placeholder="中文名 / 学名 / 拼音 / 首字母，如：丹顶鹤 / Grus japonensis / dandinghe / ddh" />
-        <button class="btn btn-primary" id="btnTaxon">检索</button>
-      </div>
-      <div id="taxonResult" class="taxon-result"></div>
-    </section>
-
     <footer class="foot">
       <p>
         数据来源：<a href="https://www.birdreport.cn/" target="_blank" rel="noreferrer">中国观鸟记录中心</a>
@@ -175,8 +156,8 @@
       </p>
       <p>
         缓存策略：榜单（本时段鸟种清单）与「疑问数据」标记各存一份，都缓存 <strong>24 小时</strong>，一天失效一次；
-        「历史稀有度」（该地区<strong>最近两年</strong>、去年 1 月 1 日起的记录数）缓存 <strong>一个月</strong>；概览与趋势等统计缓存 <strong>10 分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code
-          id="cacheBackend">data/api-cache.json</code>，服务重启后自动读入内存继续复用。
+        「历史稀有度」（该地区<strong>最近两年</strong>、去年 1 月 1 日起的记录数）与行政区字典（省 / 市 / 区县）缓存 <strong>一个月</strong>；概览与趋势等统计缓存 <strong>10
+          分钟</strong>；郑四名录缓存 7 天。以上都持久化到本地缓存 <code id="cacheBackend">data/api-cache.json</code>，服务重启后自动读入内存继续复用。
         同一地区只向上游取一次，切换筛选 / 排序 / 翻页直接复用缓存。需要最新数据时点「刷新数据」。
       </p>
       <p class="foot-note">
@@ -200,17 +181,21 @@
   <div id="loading" class="loading-mask" hidden>
     <div class="spinner"></div>
     <p id="loadingText">正在汇总数据…</p>
+    <button class="btn btn-mini" id="btnCancelLoading" type="button" title="中止本次查询，回到页面上继续操作">取消</button>
   </div>
 
   <!-- 概览卡下钻：鸟种 / 报告明细 -->
   <div id="detailModal" class="modal-mask" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
       <div class="modal-head">
-        <h3 id="detailTitle">明细</h3>
+        <div class="mh-left">
+          <button class="modal-back" id="btnDetailBack" hidden aria-label="返回明细列表">‹ 返回</button>
+          <h3 id="detailTitle">明细</h3>
+        </div>
         <button class="modal-close" id="detailClose" aria-label="关闭" title="关闭（Esc）">×</button>
       </div>
       <div class="modal-sub" id="detailSub"></div>
-      <div class="detail-tools">
+      <div class="detail-tools" id="detailTools">
         <input type="search" id="dSearch" placeholder="筛选…" />
         <select id="dSort" class="mini-select">
           <option value="record">按稀有度（近两年记录少→多）</option>
@@ -218,7 +203,7 @@
         </select>
       </div>
       <div class="modal-body" id="detailBody"></div>
-      <div class="modal-foot">
+      <div class="modal-foot" id="detailFoot">
         <span class="pager-info" id="dPageInfo"></span>
         <div class="pager-btns">
           <button class="btn btn-mini" id="dPrev">上一页</button>

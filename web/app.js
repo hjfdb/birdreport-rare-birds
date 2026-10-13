@@ -14,10 +14,10 @@ const API = (() => {
   // 不能直连上游：记录中心的接口虽然有 CORS 头，但从 file:// 发出仍会被浏览器拦下，
   // 所以取数统一交给本机服务端完成（服务端已对 /api/* 放开 Access-Control-Allow-Origin）。
   const base = location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:8787';
-  return (p, q) => {
+  return (p, q, signal) => {
     const u = new URL(base + '/api/' + p, location.href);
     if (q) for (const k in q) if (q[k] !== undefined && q[k] !== null && q[k] !== '') u.searchParams.set(k, q[k]);
-    return fetch(u).then(async (r) => {
+    return fetch(u, signal ? { signal } : undefined).then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `请求失败 (${r.status})`);
       return j;
@@ -714,30 +714,6 @@ function commitRecordInputs() {
   state.user = $('inpUser').value.trim();
 }
 
-/** 用地区鸟种清单喂「鸟种名称」的输入联想；榜单被收窄到很少时就不再刷新，避免只剩一项 */
-function populateTaxonDatalist(list) {
-  const dl = $('dlTaxon');
-  if (!dl || !list || list.length < 15) return;
-  const names = new Set();
-  for (const x of list) if (x.name) names.add(x.name);
-  if (names.size < 10) return;
-  dl.innerHTML = [...names].slice(0, 2000).map((n) => `<option value="${esc(n)}"></option>`).join('');
-}
-
-/** 报告明细里出现过的观鸟点 / 记录人，顺手做成输入联想（不额外请求上游） */
-function populateRecordDatalists(rows) {
-  if (!rows || !rows.length) return;
-  const fill = (id, values) => {
-    const dl = $(id);
-    if (!dl || !values.size) return;
-    const cur = new Set([...dl.options].map((o) => o.value));
-    for (const v of values) cur.add(v);
-    dl.innerHTML = [...cur].slice(0, 500).map((v) => `<option value="${esc(v)}"></option>`).join('');
-  };
-  fill('dlPoint', new Set(rows.map((r) => r.pointName).filter(Boolean)));
-  fill('dlUser', new Set(rows.map((r) => r.username).filter(Boolean)));
-}
-
 /* ---------------------------------------------------------------- *
  * 渲染：概览
  * ---------------------------------------------------------------- */
@@ -1003,17 +979,41 @@ function renderRankChart(el, list) {
  * 主查询
  * ---------------------------------------------------------------- */
 let firstQuery = true;
+/** 正在跑的查询数：并发时只有最后一个结束才收起遮罩（避免前一个的收尾把后一个的转圈关掉） */
+let runningQueries = 0;
+/** 最近一轮查询的中止开关：加载遮罩上的「取消」按钮用它中止所有在途请求 */
+let currentQueryAbort = null;
 
 async function runQuery() {
+  // 每次查询都给「等待」反馈（不只是首次加载）：首次立刻弹遮罩，之后的点击
+  // 延迟 200ms 再弹 —— 命中本地缓存时通常毫秒级返回，立刻弹会闪一下反而难看；
+  // 真正要等（上游取数 / 历史稀有度重试）的时候，转圈一定看得见。
+  runningQueries += 1;
+  let loadingTimer = null;
+  // 本轮查询的中止开关：加载遮罩上的「取消」按钮会 abort 它 —— 在途请求立刻失败，
+  // 走下面的 catch 安静收场（保留页面上已有的结果，不弹错误）
+  const abort = new AbortController();
+  currentQueryAbort = abort;
   if (firstQuery) showLoading('正在汇总 ' + regionText() + ' 的观鸟数据…');
+  else loadingTimer = setTimeout(() => showLoading('正在汇总 ' + regionText() + ' 的观鸟数据…'), 200);
   firstQuery = false;
   setStatus('busy', '查询中…');
+  // 收尾：清掉未触发的延迟器；所有并发查询都结束才收起遮罩
+  const finishLoading = () => {
+    clearTimeout(loadingTimer);
+    runningQueries -= 1;
+    if (currentQueryAbort === abort) currentQueryAbort = null;
+    if (runningQueries <= 0) {
+      runningQueries = 0;
+      hideLoading();
+    }
+  };
 
   // 顶部记录检索：鸟种名称需要先解析成 taxon_id；
   // 匹配到多个不同鸟种时先让用户挑，不带着错的条件去查
   const ready = await prepareRecordFilters();
   if (!ready) {
-    hideLoading();
+    finishLoading();
     setStatus('', '请选择要查询的鸟种');
     return;
   }
@@ -1032,16 +1032,23 @@ async function runQuery() {
     // 概览 / 趋势只是辅助信息，单独吞掉自己的错误——
     // 上游偶发 505 风控时不该把一整页拖成「查询失败」。
     const [overview, hot, trend] = await Promise.all([
-      API('overview', { ...where, ...nocache }).catch((e) => ({ __error: e.message })),
+      API('overview', { ...where, ...nocache }, abort.signal).catch((e) => {
+        if (e.name === 'AbortError') throw e; // 「取消」不是失败，交给外层安静收场
+        return { __error: e.message };
+      }),
       // 不传 top：让服务端返回该地区全部鸟种（榜单要完整展示）
-      API('hot', { ...where, ...nocache, ...liferNocache, filter: state.filter, sort: state.sort, q: state.q, ensure: 200, liferUser: state.lifer }),
+      API('hot', { ...where, ...nocache, ...liferNocache, filter: state.filter, sort: state.sort, q: state.q, ensure: 200, liferUser: state.lifer }, abort.signal),
       // 侧栏图表关闭时不请求趋势接口，省一次上游调用
-      wantCharts ? API('trend', { ...where, ...nocache }).catch((e) => ({ __error: e.message, months: [] })) : Promise.resolve({ months: [] }),
+      wantCharts
+        ? API('trend', { ...where, ...nocache }, abort.signal).catch((e) => {
+            if (e.name === 'AbortError') throw e;
+            return { __error: e.message, months: [] };
+          })
+        : Promise.resolve({ months: [] }),
     ]);
 
     state.hot = hot;
     state.trend = trend;
-    populateTaxonDatalist(hot.list);
 
     if (!where.province) {
       // 数据源不支持全国级鸟种聚合
@@ -1069,36 +1076,41 @@ async function runQuery() {
       renderMonthlyChart($('chartTaxon'), trend.months, 'taxonCount', 'bar-taxon');
       renderMonthlyChart($('chartReport'), trend.months, 'reportCount', 'bar-report');
       // 地区排行榜：优先下一级行政区，其次全国省份
-      await loadRegionRank(where, nocache);
+      await loadRegionRank(where, nocache, abort.signal);
     }
 
     setStatus('ok', `已更新 · ${new Date().toLocaleTimeString('zh-CN')}`);
   } catch (e) {
-    console.error(e);
-    setStatus('err', '查询失败');
-    $('hotList').innerHTML = `<div class="notice error">查询失败：${esc(e.message)}</div>`;
+    if (e && e.name === 'AbortError') {
+      // 用户点了「取消」：安静收场 —— 保留页面上的旧结果，不报错
+      setStatus('', '查询已取消');
+    } else {
+      console.error(e);
+      setStatus('err', '查询失败');
+      $('hotList').innerHTML = `<div class="notice error">查询失败：${esc(e.message)}</div>`;
+    }
   } finally {
-    hideLoading();
+    finishLoading();
     // 每次查询后记录当前条件，刷新页面时自动还原
     persist();
   }
 }
 
-async function loadRegionRank(where, nocache = {}) {
+async function loadRegionRank(where, nocache = {}, signal) {
   const el = $('chartRegionRank');
   try {
     let title = '地区鸟种数排行';
     let list = [];
     if (where.province) {
       const level = where.city ? 'district' : 'city';
-      const r = await API('region-rank', { ...where, ...nocache, level });
+      const r = await API('region-rank', { ...where, ...nocache, level }, signal);
       list = r.list || [];
       if (list.length) {
         title = r.unit === '区县' ? `${r.unit}鸟种数 · ${where.city || where.province}` : `${where.province} 各地市鸟种数`;
       }
     }
     if (!list.length) {
-      const r = await API('province-rank', { ...nocache, version: 'CH4' });
+      const r = await API('province-rank', { ...nocache, version: 'CH4' }, signal);
       list = (r.list || []).slice(0, 14);
       title = '全国各省鸟种数（前 14）';
     }
@@ -1107,33 +1119,6 @@ async function loadRegionRank(where, nocache = {}) {
     renderRankChart(el, list);
   } catch (e) {
     el.innerHTML = `<div class="empty-chart">${esc(e.message)}</div>`;
-  }
-}
-
-/* ---------------------------------------------------------------- *
- * 物种检索
- * ---------------------------------------------------------------- */
-async function searchTaxon() {
-  const kw = $('inpTaxon').value.trim();
-  const box = $('taxonResult');
-  if (!kw) { box.innerHTML = ''; return; }
-  box.innerHTML = '<div class="hint">检索中…</div>';
-  try {
-    const r = await API('taxon-search', { q: kw });
-    const list = r.data || [];
-    if (!list.length) { box.innerHTML = '<div class="notice">未找到匹配的鸟种。</div>'; return; }
-    box.innerHTML = list
-      .map(
-        (t) => `<div class="taxon-card">
-        <div class="tc-cn">${esc(t.name)}</div>
-        <div class="tc-latin">${esc(t.latin)}</div>
-        <div class="tc-meta">${esc(t.order)} · ${esc(t.family)}</div>
-        <div class="badges">${levelBadge(t)}${t.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : ''}${iucnBadge(t.iucn)}</div>
-      </div>`
-      )
-      .join('');
-  } catch (e) {
-    box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`;
   }
 }
 
@@ -1179,6 +1164,12 @@ const detail = {
   q: '',
   sort: 'record',
   meta: null,
+  /** 'list' = 明细列表；'report' = 应用内的报告详情（点行进入，可返回）。
+      注意别叫 view —— detail.view 是「筛选后的行数组」，两者名字必须分开 */
+  pane: 'list',
+  reportId: '',
+  /** 列表视图的标题：从报告详情返回时用来还原弹层标题 */
+  listTitle: '',
 };
 
 async function openDetail(metric, opts = {}) {
@@ -1198,11 +1189,17 @@ async function openDetail(metric, opts = {}) {
     q: '',
     sort: 'record',
     meta: null,
+    pane: 'list',
+    reportId: '',
+    listTitle: opts.title || m.title,
   });
 
   $('detailModal').hidden = false;
   document.body.style.overflow = 'hidden';
   $('detailTitle').textContent = opts.title || m.title;
+  $('btnDetailBack').hidden = true;
+  $('detailTools').hidden = false;
+  $('detailFoot').hidden = false;
   $('detailSub').innerHTML = '';
   $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取明细…</p></div>';
   $('dPageInfo').textContent = '';
@@ -1239,8 +1236,6 @@ async function reloadDetail() {
       const r = await API('records', { ...detail.where, page: detail.page, limit: DETAIL_REPORT_PAGE_SIZE });
       detail.rows = r.list || [];
       detail.meta = { total: r.total, totalPages: r.totalPages, page: r.page, returned: r.returned };
-      // 顺手把出现过的观鸟点 / 记录人做成顶部输入联想
-      populateRecordDatalists(detail.rows);
       applyDetailFilter(false);
     }
   } catch (e) {
@@ -1345,13 +1340,12 @@ function taxonRow(x, no) {
 
 function reportRow(x, no, compact = false) {
   const span = x.startTime && x.endTime ? `${x.startTime.slice(5, 16)} ~ ${x.endTime.slice(11, 16)}` : '';
-  const link = x.url
-    ? `<a class="rep-link" href="${esc(x.url)}" target="_blank" rel="noreferrer noopener" title="打开上游报告详情">${esc(x.serialId || '查看报告')} ↗</a>`
-    : esc(x.serialId || '—');
+  // 序列号不再直接外跳：点整行打开应用内的「报告详情」（详情里另给「记录中心原页」小链接）
+  const link = `<span class="rep-link" title="查看报告详情">${esc(x.serialId || '查看报告')} ›</span>`;
   // 按单个鸟种收窄时只留「发现点 / 发现人 / 时间」：一份报告里往往有几十种鸟，
   // 「区县」和「鸟种数」在这个语境下不说明任何问题，反而把表撑宽。
   if (compact) {
-    return `<tr class="is-jump" data-url="${esc(x.url || '')}">
+    return `<tr class="is-jump" data-report-id="${esc(x.reportId || '')}">
       <td class="ta-c num">${no}</td>
       <td class="d-name">${esc(x.pointName || '—')}</td>
       <td data-label="发现人">${esc(x.username || '—')}</td>
@@ -1359,7 +1353,7 @@ function reportRow(x, no, compact = false) {
       <td class="d-dim mono">${link}</td>
     </tr>`;
   }
-  return `<tr class="is-jump" data-url="${esc(x.url || '')}">
+  return `<tr class="is-jump" data-report-id="${esc(x.reportId || '')}">
     <td class="ta-c num">${no}</td>
     <td class="d-name">${esc(x.pointName || '—')}</td>
     <td class="d-dim" data-label="区县">${esc([x.city, x.district].filter(Boolean).join(' '))}</td>
@@ -1429,6 +1423,90 @@ function renderDetail() {
 }
 
 /* ---------------------------------------------------------------- *
+ * 报告详情（应用内打开，不跳记录中心）
+ *
+ * 报告明细里点行 / 报告编号时，在同一个弹层里把「列表」换成「报告详情」视图，
+ * 头部出现「‹ 返回」。数据来自 /api/report（上游 activity/get + activity/taxon
+ * 两个接口组装：观鸟点 / 时段 / 记录人 / 备注 + 整份鸟种清单，含数量与标疑）。
+ * ---------------------------------------------------------------- */
+async function openReport(reportId) {
+  if (!reportId) return;
+  detail.pane = 'report';
+  detail.reportId = reportId;
+  $('btnDetailBack').hidden = false;
+  $('detailTools').hidden = true; // 筛选 / 排序是列表的工具，详情里不适用
+  $('detailFoot').hidden = true; // 分页同理
+  $('detailTitle').textContent = '报告详情';
+  $('detailSub').innerHTML = '';
+  $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取报告…</p></div>';
+  $('detailBody').scrollTop = 0;
+  try {
+    const r = await API('report', { reportId, liferUser: state.lifer });
+    // 期间可能已经点了「返回」或换了另一份报告：迟到的响应直接丢弃
+    if (detail.pane !== 'report' || detail.reportId !== reportId) return;
+    renderReport(r);
+  } catch (e) {
+    if (detail.pane !== 'report' || detail.reportId !== reportId) return;
+    $('detailBody').innerHTML = `<div class="notice error">读取报告失败：${esc(e.message)}</div>`;
+  }
+}
+
+/** 从报告详情返回明细列表：按原状态重画（标题 / 副标题 / 分页都恢复） */
+function closeReport() {
+  if (detail.pane !== 'report') return;
+  detail.pane = 'list';
+  detail.reportId = '';
+  $('btnDetailBack').hidden = true;
+  $('detailTools').hidden = false;
+  $('detailFoot').hidden = false;
+  $('detailTitle').textContent = detail.listTitle || '明细';
+  renderDetail();
+}
+
+function renderReport(r) {
+  const list = r.list || [];
+  const span = r.startTime ? `${esc(r.startTime)}${r.endTime ? ' ~ ' + esc(r.endTime.slice(11)) : ''}` : '';
+  const loc = [r.province, r.city && r.city !== r.province ? r.city : '', r.district].filter(Boolean).join(' · ');
+  const chips = [
+    span ? `<span class="rp-chip">${span}</span>` : '',
+    `<span class="rp-chip">记录人 ${esc(r.username || '—')}</span>`,
+    `<span class="rp-chip">${fmt(r.taxonCount)} 种 · 目 ${fmt(r.orderCount)} · 科 ${fmt(r.familyCount)}</span>`,
+    r.serialId ? `<span class="rp-chip mono">${esc(r.serialId)}</span>` : '',
+  ].filter(Boolean).join('');
+  const items = list
+    .map((x) => {
+      // 徽章沿用榜单/明细那套：未加新（青）> 疑问（红）由样式里的 :not() 保证优先级
+      const badges =
+        levelBadge(x) + (x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : '') + iucnBadge(x.iucn);
+      const liferBadge = x.lifer ? '<span class="badge lifer">未加新</span>' : '';
+      const doubtBadge = x.doubt ? '<span class="badge doubt">疑问</span>' : '';
+      const nameCls = 'rp-name' + (x.doubt ? ' is-doubt' : '') + (x.lifer && !x.doubt ? ' is-lifer' : '');
+      const sub = [x.order, x.family].filter(Boolean).join(' · ');
+      return `<div class="rp-item">
+        <div class="rp-main">
+          <div class="rp-name-row"><span class="${nameCls}">${esc(x.name)}</span>${liferBadge}${doubtBadge}${badges}</div>
+          <div class="rp-latin">${esc(x.latin || '')}</div>
+          <div class="rp-sub">${esc(sub)}${x.imageNum ? esc((sub ? ' · ' : '') + '图片 ' + x.imageNum) : ''}</div>
+        </div>
+        <div class="rp-count"><b>${fmt(x.count)}</b><span>只</span></div>
+      </div>`;
+    })
+    .join('');
+  $('detailSub').innerHTML =
+    r.lifer && r.lifer.liferUser && !r.lifer.liferError
+      ? `<span class="lifer-foot"><i class="lifer-dot"></i>其中 <strong>${fmt(r.lifer.liferNewCount)}</strong> 种是你（${esc(r.lifer.liferUser)}）还没加新的</span>`
+      : '';
+  $('detailBody').innerHTML = `
+    <div class="rp-head">
+      <div class="rp-point">${esc(r.point || '—')}</div>
+      <div class="rp-where">${esc(loc)}</div>
+      <div class="rp-chips">${chips}<a class="rp-orig" href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" title="在记录中心打开原页（照片等完整内容）">记录中心原页 ↗</a></div>
+      ${r.note ? `<div class="rp-note">备注：${esc(r.note)}</div>` : ''}
+    </div>
+    <div class="rp-list">${items || '<div class="notice">这份报告没有鸟种明细。</div>'}</div>`;
+}
+
+/* ---------------------------------------------------------------- *
  * 弹层高度要跟着「实际能看见的高度」走
  *
  * 手机浏览器的地址栏 / 底部工具条会伸缩，而 CSS 的 vh 是按「工具条收起」时的
@@ -1459,22 +1537,31 @@ function trackViewportHeight() {
 function bind() {
   trackViewportHeight();
 
+  // 省 / 市 / 区县下拉只改查询条件、**不自动查询** —— 三级联动会一路连发好几次
+  // 请求，改成等用户点「查询」再执行。下级下拉仍然立刻联动（那是拉选项，
+  // 不是查数据），并在状态栏提示条件已改。
+  const regionPendingHint = () => setStatus('', '查询条件已改，点「查询」更新');
   $('selProvince').addEventListener('change', async (e) => {
     state.region.province = e.target.value;
     state.region.city = '';
     state.region.district = '';
     await loadCities();
-    runQuery();
+    regionPendingHint();
   });
   $('selCity').addEventListener('change', async (e) => {
     state.region.city = e.target.value;
     state.region.district = '';
     await loadDistricts();
-    runQuery();
+    regionPendingHint();
   });
   $('selDistrict').addEventListener('change', (e) => {
     state.region.district = e.target.value;
-    runQuery();
+    regionPendingHint();
+  });
+  // 加载遮罩上的「取消」：中止本轮查询（在途请求全部 abort），由 runQuery 安静收场
+  $('btnCancelLoading').addEventListener('click', () => {
+    if (currentQueryAbort) currentQueryAbort.abort();
+    else hideLoading(); // 兜底：没有在途查询时直接把遮罩收掉
   });
   // 查询按钮就在「记录检索」这一行，点击时把日期框与检索条件一起提交
   $('btnQuery').addEventListener('click', () => {
@@ -1539,11 +1626,13 @@ function bind() {
       runQuery();
     }
   });
-  // ---- 报告明细里点一行 → 新窗口打开上游报告详情 ----
+  // 报告明细里点任意一行 / 报告编号 → 打开应用内的「报告详情」（不再跳记录中心；
+  // 详情页里保留一个「记录中心原页 ↗」小链接，要看照片等完整内容时再去）
   $('detailBody').addEventListener('click', (e) => {
-    const tr = e.target.closest('tr[data-url]');
-    if (tr && tr.dataset.url) window.open(tr.dataset.url, '_blank', 'noopener');
+    const tr = e.target.closest('tr[data-report-id]');
+    if (tr && tr.dataset.reportId) openReport(tr.dataset.reportId);
   });
+  $('btnDetailBack').addEventListener('click', closeReport);
 
   $('selFilter').addEventListener('change', (e) => {
     state.filter = e.target.value;
@@ -1675,10 +1764,6 @@ function bind() {
     }
   });
 
-  $('btnTaxon').addEventListener('click', searchTaxon);
-  $('inpTaxon').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') searchTaxon();
-  });
   let rt;
   window.addEventListener('resize', () => {
     if (!sideChartsVisible()) return; // 侧栏图表关闭时无需重绘

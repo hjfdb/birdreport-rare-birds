@@ -33,6 +33,8 @@ import {
   getDistrictChart,
   searchTaxons,
   searchRecords,
+  getActivity,
+  getActivityTaxons,
 } from './birdreport.mjs';
 import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
@@ -64,6 +66,12 @@ const HOT_TTL_MS = Number(process.env.HOT_TTL_MS || 24 * 60 * 60 * 1000);
  * 一个月内所有请求都命中本地，不再向上游发这份慢查询。
  */
 const HISTORY_TTL_MS = Number(process.env.HISTORY_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+/**
+ * 行政区字典（省 / 市 / 区县三级）缓存一个月：区划码是静态参考数据，基本不变。
+ * 跟着 10 分钟的统计缓存反复回源没有意义 —— 上游偶发 500 时，它还会把首次
+ * 打开直接卡在「无法连接服务端」（拿不到省份列表就没法初始化）。
+ */
+const DICT_TTL_MS = Number(process.env.DICT_TTL_MS || 30 * 24 * 60 * 60 * 1000);
 /**
  * 「疑问数据」标记（上游 AI 半自动鸟种标疑）单独一份缓存。
  * 它和榜单一样是按「区域 + 时段」聚合的慢查询，同节奏：一天失效一次。
@@ -127,6 +135,9 @@ async function cached(key, loader, force = false, { ttl } = {}) {
     },
   };
 }
+
+/** 行政区字典（省 / 市 / 区县）专用的缓存封装：统一一个月 TTL，不接受外部强刷 */
+const dictCached = (key, loader) => cached(key, loader, false, { ttl: DICT_TTL_MS });
 
 /* ------------------------------------------------------------------ *
  * 工具
@@ -760,15 +771,56 @@ function reportUrl(reportId) {
   return `https://www.birdreport.cn/home/record/page.html?param=${encodeURIComponent(param)}&sign=${REPORT_SIGN}`;
 }
 
+/**
+ * 从上游新版的 address 字段里拆出 省 / 市 / 区县 / 观鸟点。
+ *
+ * 上游 2026-10-13 实测：`record/activity/search` 把原来的
+ * point_name / province_name / city_name / district_name 四个字段
+ * **合并成了一个 address**，格式为「省+市+区县+观鸟点」，例如：
+ *   福建省福州市仓山区福州花海公园        → 点：福州花海公园
+ *   北京市北京市怀柔区北京市怀柔区神山村   → 直辖市会把「市+区」再重复一遍，也要剥掉
+ * 拆不出来时退回「整串当观鸟点」—— 宁可显示得长一点，也不能留空。
+ */
+function splitAddress(address) {
+  const s = String(address || '').trim();
+  // 市名的后缀匹配要防「州市」连写：「福州市」不能拆成「福州」+「市…」，
+  // 所以 州 后面跟 市 的不算后缀（自治州里的 州 后面通常跟区县名，不受影响）；
+  // 区县的 县(?!区) 同理防「梅县区」被拆成「梅县」+「区…」。
+  const m = s.match(/^(.+?(?:省|市|自治区|特别行政区))(.+?(?:自治州|市|盟|地区|州(?!市)))?(.+?(?:区|县(?!区)|旗|市))(.+)$/);
+  if (!m) return { province: '', city: '', district: '', point: s };
+  const [, province, city = '', district, rest] = m;
+  // 老数据里区县存的是「市辖区」（不是真区名），真区名跟在它后面：
+  // 北京市市辖区朝阳区望京公园 → 区 朝阳区 / 点 望京公园
+  if (district === '市辖区') {
+    const m2 = rest.match(/^(.+?(?:区|县(?!区)|旗))(.+)$/);
+    if (m2) return { province, city, district: m2[1], point: m2[2] };
+  }
+  // 有的 address 把「省+市+区县」又重复了一遍才接观鸟点（直辖市常见，地级市也偶发），
+  // 按「最长优先」剥掉重复前缀：北京市北京市怀柔区北京市怀柔区神山村 → 神山村；
+  // 浙江省杭州市西湖区浙江省杭州市西湖区曲院风荷 → 曲院风荷
+  let point = rest;
+  for (const dup of [`${province}${city}${district}`, `${city}${district}`, district]) {
+    if (dup && point.startsWith(dup) && point.length > dup.length) {
+      point = point.slice(dup.length);
+      break;
+    }
+  }
+  return { province, city, district, point };
+}
+
 function normalizeRecord(d) {
   const reportId = d.reportId || d.request_id || d.serial_id || '';
+  // 兼容两种上游形态：老行还带 point_name 等字段就用旧的；新行（2026-10 起）从 address 拆
+  const loc = d.point_name
+    ? { province: d.province_name || '', city: d.city_name || '', district: d.district_name || '', point: d.point_name }
+    : splitAddress(d.address);
   return {
     reportId,
     serialId: d.serial_id || '',
-    pointName: d.point_name || '',
-    province: d.province_name || '',
-    city: d.city_name || '',
-    district: d.district_name || '',
+    pointName: loc.point,
+    province: loc.province,
+    city: loc.city,
+    district: loc.district,
     startTime: d.start_time || '',
     endTime: d.end_time || '',
     taxonCount: Number(d.taxoncount) || 0,
@@ -990,7 +1042,7 @@ async function searchCatalog(kw) {
 const routes = {
   // 省级字典
   async 'GET /api/provinces'() {
-    const { value, meta } = await cached('dict:provinces', () => getProvinces());
+    const { value, meta } = await dictCached('dict:provinces', () => getProvinces());
     return { data: (value.data || []).map((d) => ({ name: d.province_name, code: String(d.province_code) })), cache: meta };
   },
 
@@ -998,7 +1050,7 @@ const routes = {
   async 'GET /api/cities'(q) {
     const code = q.get('provinceCode');
     if (!code) throw new HttpError(400, '缺少 provinceCode');
-    const { value, meta } = await cached('dict:cities:' + code, () => getCities(code));
+    const { value, meta } = await dictCached('dict:cities:' + code, () => getCities(code));
     return { data: (value.data || []).map((d) => ({ name: d.city_name, code: String(d.city_code) })), cache: meta };
   },
 
@@ -1006,7 +1058,7 @@ const routes = {
   async 'GET /api/districts'(q) {
     const code = q.get('cityCode');
     if (!code) throw new HttpError(400, '缺少 cityCode');
-    const { value, meta } = await cached('dict:districts:' + code, () => getDistricts(code));
+    const { value, meta } = await dictCached('dict:districts:' + code, () => getDistricts(code));
     return { data: (value.data || []).map((d) => ({ name: d.district_name, code: String(d.district_code) })), cache: meta };
   },
 
@@ -1319,6 +1371,73 @@ const routes = {
     };
   },
 
+  // 单份观鸟报告详情：「报告明细」里点报告编号 / 行时，弹我们自己的页面用。
+  // 上游是站点报告页用的两个接口：activity/get（基本信息）+ activity/taxon（鸟种清单）。
+  // 报告上传后内容基本不变，缓存沿用默认 10 分钟。
+  async 'GET /api/report'(q) {
+    const reportId = (q.get('reportId') || '').trim();
+    if (!reportId) throw new HttpError(400, '缺少 reportId');
+    const liferUser = (q.get('liferUser') || '').trim();
+    const { value, meta } = await cached(
+      `report|${reportId}`,
+      async () => {
+        const [infoRes, taxRes] = await Promise.all([getActivity(reportId), getActivityTaxons(reportId)]);
+        const info = infoRes.data || {};
+        const loc = splitAddress(info.address || '');
+        const rows = Array.isArray(taxRes.data) ? taxRes.data : [];
+        const ids = rows.map((t) => Number(t.taxon_id) || 0).filter(Boolean);
+        // 保护等级：全国字典基本都在，缺的顺手补一小批（其余进后台队列慢慢补）
+        await ensureLevels(ids, { limit: 80, wait: true });
+        const levels = readCachedLevels(ids);
+        const list = rows.map((t) => {
+          const id = Number(t.taxon_id) || 0;
+          const lv = levels[id] || {};
+          return {
+            taxonId: id,
+            name: t.taxon_name || '',
+            latin: t.latinname || '',
+            english: t.englishname || '',
+            order: t.taxonordername || '',
+            family: t.taxonfamilyname || '',
+            count: Number(t.taxon_count) || 0,
+            doubt: t.outside_type === 1, // 上游 AI 标疑（站点显示为红色）
+            imageNum: Number(t.record_image_num) || 0,
+            chinaLevel: lv.china_level || '',
+            iucn: lv.iucn || '',
+            chinaEndemic: !!lv.is_china,
+          };
+        });
+        return {
+          reportId,
+          serialId: info.serialId || '',
+          point: info.pointName || loc.point || '',
+          province: loc.province,
+          city: loc.city,
+          district: loc.district,
+          address: info.address || '',
+          startTime: info.startTime || '',
+          endTime: info.endTime || '',
+          username: info.username || '',
+          note: info.note || '',
+          taxonCount: Number(info.taxonCount) || list.length,
+          orderCount: new Set(list.map((x) => x.order).filter(Boolean)).size,
+          familyCount: new Set(list.map((x) => x.family).filter(Boolean)).size,
+          url: reportUrl(reportId),
+          list,
+        };
+      },
+      q.get('nocache') === '1'
+    );
+    const payload = { ...value, cache: meta };
+    // 「未加新」比对：与榜单共用同一份人生鸟种名单（名单本身不因此回源）
+    if (liferUser) {
+      const lifer = await applyLifer(payload.list, liferUser, false);
+      payload.list = lifer.list;
+      payload.lifer = lifer.info;
+    }
+    return payload;
+  },
+
   // 逐月趋势
   async 'GET /api/trend'(q) {
     const where = buildWhere(q);
@@ -1385,9 +1504,9 @@ const routes = {
       const provinceName = where.province;
       if (!provinceName) return { level, unit: '', list: [] };
 
-      const provs = (await cached('dict:provinces', () => getProvinces())).value.data || [];
+      const provs = (await dictCached('dict:provinces', () => getProvinces())).value.data || [];
       const provCode = provs.find((p) => p.province_name === provinceName)?.province_code || '';
-      const cities = (await cached('dict:cities:' + provCode, () => getCities(provCode))).value.data || [];
+      const cities = (await dictCached('dict:cities:' + provCode, () => getCities(provCode))).value.data || [];
       const MUNI = ['北京市', '天津市', '上海市', '重庆市'];
 
       let units = [];
@@ -1398,7 +1517,7 @@ const routes = {
         // 区县级：直辖市直接用本市的区县，普通省份用所选地市的区县
         const cityName = MUNI.includes(provinceName) ? provinceName : where.city || cities[0]?.city_name;
         const cityCode = cities.find((c) => c.city_name === cityName)?.city_code || '';
-        const districts = (await cached('dict:districts:' + cityCode, () => getDistricts(cityCode))).value.data || [];
+        const districts = (await dictCached('dict:districts:' + cityCode, () => getDistricts(cityCode))).value.data || [];
         units = districts.map((d) => d.district_name);
         unit = '区县';
       }

@@ -34,7 +34,7 @@ html, body {
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.wrap { max-width: 1360px; margin: 0 auto; padding: 0 20px; }
+.wrap { max-width: 1360px; margin: 0 auto; padding: 0 5px; }
 
 /* ---------------- 顶栏 ---------------- */
 .topbar {
@@ -370,16 +370,7 @@ input[type="search"] { min-width: 200px; }
 .chart .bar-label { font-size: 10px; fill: #4b5563; }
 .empty-chart { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12.5px; }
 
-/* ---------------- 物种检索 ---------------- */
-.search-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
-.search-row input { flex: 1; min-width: 240px; }
-.taxon-result { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 10px; }
-.taxon-card {
-  border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; background: var(--surface-2);
-}
-.taxon-card .tc-cn { font-size: 14px; font-weight: 620; }
-.taxon-card .tc-latin { font-size: 11.5px; color: var(--muted); font-style: italic; }
-.taxon-card .tc-meta { font-size: 11.5px; color: var(--text-2); margin-top: 4px; }
+/* （原「按鸟种查看保护等级」物种检索面板已移除：/api/taxon-search 接口保留，页面不再有入口） */
 
 /* ---------------- 其它 ---------------- */
 .loading-mask[hidden] { display: none; }
@@ -461,6 +452,42 @@ input[type="search"] { min-width: 200px; }
 .pager-btns { display: flex; gap: 8px; }
 .detail-loading { padding: 52px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
 
+/* ---------------- 报告详情（弹层里的第二个视图：列表 ↔ 详情，头部带「‹ 返回」） ---------------- */
+.mh-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.modal-back {
+  height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border-strong);
+  background: #fff; color: var(--text-2); font-size: 12.5px; font-family: inherit; cursor: pointer;
+  flex: none; transition: border-color .15s, color .15s;
+}
+.modal-back:hover { border-color: var(--primary); color: var(--primary); }
+.modal-back[hidden] { display: none; }
+/* 报告详情视图里要藏掉列表的工具行与翻页条：这两块自带 display:flex，
+   会盖过 UA 对 [hidden] 的 display:none，必须显式声明（与 .modal-mask[hidden] 同理） */
+.detail-tools[hidden], .modal-foot[hidden] { display: none; }
+.rp-head { padding: 2px 0 12px; border-bottom: 1px solid var(--border); }
+.rp-point { font-size: 17px; font-weight: 650; line-height: 1.4; }
+.rp-where { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+.rp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
+.rp-chip {
+  font-size: 11.5px; color: var(--text-2); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 12px; padding: 2px 9px; font-variant-numeric: tabular-nums;
+}
+.rp-chip.mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.rp-orig { font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+.rp-note { margin-top: 8px; font-size: 12.5px; color: var(--text-2); line-height: 1.7; }
+.rp-list { padding-bottom: 6px; }
+.rp-item { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+.rp-main { flex: 1; min-width: 0; }
+.rp-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rp-name { font-size: 14px; font-weight: 580; }
+.rp-name.is-doubt { color: #cf2020; }
+.rp-name.is-lifer { color: #0a6570; }
+.rp-latin { font-size: 11.5px; color: var(--muted); font-style: italic; margin-top: 1px; }
+.rp-sub { font-size: 11.5px; color: var(--text-2); margin-top: 1px; }
+.rp-count { flex: none; text-align: right; min-width: 44px; }
+.rp-count b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.rp-count span { font-size: 11px; color: var(--muted); margin-left: 2px; }
+
 /* ---------------- 弹层：窄屏或矮屏下的紧凑排版 ----------------
    矮屏主要是横屏手机（宽度超过 720px、高度只有三四百像素）：24px 的遮罩留白
    与大号标题会把正文区压得没剩几行。这里把留白收紧、高度顶满可视区
@@ -519,7 +546,7 @@ input[type="search"] { min-width: 200px; }
      ▸ 第二行：连接状态独占一条、左对齐贴在最下 —— 之前它挂在「我的」正下方并右对齐，
        和按钮挤成一小坨贴在屏幕右缘，很难看。 */
   .topbar-inner {
-    height: auto; min-height: 54px; padding: 9px 0;
+    height: auto; min-height: 54px; padding: 5px 0;
     flex-direction: row; flex-wrap: wrap; align-items: center;
     justify-content: space-between; gap: 6px 10px;
   }
@@ -570,9 +597,10 @@ input[type="search"] { min-width: 200px; }
   .hc-hist { font-size: 10.5px; line-height: 1.5; }
   .hc-foot { padding-top: 4px; }
 
-  /* 概览卡共 5 张：固定两列，并把末尾落单的那张铺满整行，避免留半格空位 */
+  /* 概览卡：手机端只留两张 —— 记录鸟种数 + 公开报告（目/科、观鸟报告数、
+     鸟种记录条数都是辅助信息，卡片多了要滚很久才看得到榜单）；两列等宽一行排下 */
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .stat-grid > :nth-child(odd):last-child { grid-column: 1 / -1; }
+  .stat-grid .stat-card:not([data-metric="taxon"]):not([data-metric="open"]) { display: none; }
 
   /* 明细弹层的紧凑排版与可见性（--vvh 机制）统一在上面的
      @media (max-width: 720px), (max-height: 620px) 块里处理，这里只管窄屏专属项：
@@ -624,7 +652,7 @@ input[type="search"] { min-width: 200px; }
   /* 顶栏右上角「我的」的尺寸微调（位置规则见上面顶栏那一段）。
      副行（已绑定 xxx / 绑定记录中心用户名）在窄屏不显示：按钮保持一行才不臃肿，
      绑定状态看底色与计数徽章；完整信息在「我的」面板里。 */
-  .my-entry { padding: 4px 11px 4px 7px; gap: 7px; }
+  .my-entry { padding: 4px 11px 4px 7px; gap: 7px; margin-right: 5px; }
   .me-icon { font-size: 15px; }
   .me-sub { display: none; }
 
