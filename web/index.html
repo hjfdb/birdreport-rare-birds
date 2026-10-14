@@ -59,6 +59,11 @@
           <option value="">全部</option>
         </select>
       </div>
+
+      <!-- 「全国」的即时提示：选中省份下拉的「全国」时出现（见 renderRegionHint）。
+           紧挨着两个日期输入框放，因为要提醒的正是「把起止日期填上」。 -->
+      <div class="region-hint" id="regionHint" hidden></div>
+
       <div class="field">
         <label>起始日期</label>
         <input type="date" id="inpStart" />
@@ -257,10 +262,32 @@
           <p class="my-msg" id="myMsg2" hidden></p>
         </div>
 
-        <!-- 待去找 · TODO + 收集拼图：都点按钮打开独立页 -->
+        <!-- 我的 TODO / 我的报告 / 收集拼图：都点按钮打开独立页。
+             图标是内联 SVG（stroke: currentColor），跟着按钮文字一起变 hover 色；
+             「我的 TODO」的数字由 renderTodoEntry() 写进 #myTodoLabel —— 不能直接改
+             按钮的 textContent，那会把图标一起抹掉。 -->
         <div class="my-todo-entry" id="myTodoEntry">
-          <button class="btn" id="btnMyTodo" type="button">我的 TODO</button>
-          <button class="btn" id="btnMyPuzzle" type="button" title="按郑四名录的「科」铺开，看每个科收到了多少">收集拼图</button>
+          <button class="btn" id="btnMyTodo" type="button">
+            <svg class="btn-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M5.7 4.6h7.4M5.7 8h7.4M5.7 11.4h7.4" />
+              <path d="M2.9 4.6h.01M2.9 8h.01M2.9 11.4h.01" />
+            </svg><span id="myTodoLabel">我的 TODO</span>
+          </button>
+          <button class="btn" id="btnMyReports" type="button" title="列出你在记录中心公开过的观鸟报告">
+            <svg class="btn-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M4.4 2.7h4.5l3.1 3.1v7.5H4.4Z" />
+              <path d="M8.9 2.8v3.1h3.1" />
+              <path d="M6.4 9.1h3.4M6.4 11.4h2.3" />
+            </svg><span>我的报告</span>
+          </button>
+          <button class="btn" id="btnMyPuzzle" type="button" title="按郑四名录的「科」铺开，看每个科收到了多少">
+            <svg class="btn-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M2.8 5.4h2.9a1.6 1.6 0 1 1 3.2 0h4.3v2.1a1.6 1.6 0 1 0 0 3.2v1.5H2.8Z" />
+            </svg><span>收集拼图</span>
+          </button>
         </div>
 
         <!-- 弹出动画：类型选择，存本机、「我的」里可改 -->

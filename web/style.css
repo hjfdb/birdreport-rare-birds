@@ -143,6 +143,16 @@ input[type="search"] { min-width: 200px; }
 .filter-hint .cand.active { border-color: var(--primary); color: var(--primary); background: #eaf3fd; font-weight: 550; }
 .filter-hint .cand .c-latin { color: var(--muted); font-size: 11px; }
 
+/* 「全国」的即时提示（renderRegionHint）：单独占一行、放在两个日期输入框之前。
+   用琥珀色而非红色 —— 它是「该满足的条件」，不是出错。 */
+.region-hint {
+  width: 100%; font-size: 12.5px; line-height: 1.7; color: #9a6a10;
+  background: #fdf7e8; border: 1px solid #f0e0b8; border-radius: 8px;
+  padding: 6px 10px; margin-top: 2px;
+}
+.region-hint[hidden] { display: none; }
+.region-hint b { font-weight: 600; }
+
 /* ---------------- 统计卡 ---------------- */
 .stat-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
@@ -207,14 +217,23 @@ input[type="search"] { min-width: 200px; }
 .hc-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hc-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; min-height: 17px; }
 .hot-card .badge { height: 17px; font-size: 10px; padding: 0 5px; }
-.hc-foot { margin-top: auto; display: flex; align-items: baseline; gap: 4px; padding-top: 7px; }
-.hc-foot .n { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+/* 大字行 = 「本时段 12 正常 │ 1 疑问」；小字行 = 「N 条近两年记录」（两行互换过位置与样式） */
+.hc-foot { margin-top: auto; display: flex; align-items: baseline; gap: 6px; padding-top: 7px; flex-wrap: wrap; }
 .hc-foot .l { font-size: 11px; color: var(--muted); }
-/* 卡片第二行：本时段记录数（大数字用的是该地区的历史记录数）
-   再拆成「正常 N 条 · 疑问 N 条」两块，有疑问记录时把这一块标红 */
+/* 一段 = 大数字 + 小字标签。颜色只上在数字上，标签留灰，避免整行花掉 */
+.hc-foot .seg { display: inline-flex; align-items: baseline; gap: 3px; }
+.hc-foot .seg b { font-size: 15px; font-weight: 660; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
+.hc-foot .seg i { font-style: normal; font-size: 10px; color: var(--muted); }
+/* outside_type=0（正常）走绿、outside_type=1（疑问数据）走红 */
+.hc-foot .seg.ok b { color: var(--green); }
+.hc-foot .seg.ok i { color: #6aa583; }
+.hc-foot .seg.bad b { color: var(--red); }
+.hc-foot .seg.bad i { color: #cc7b7b; }
+/* 两段之间用一根发丝线：比竖线字符「|」细，也不占字宽、不受字号影响 */
+.hc-foot .hair { align-self: center; flex: none; width: 1px; height: 11px; background: var(--border-strong); }
+/* 小字行：该地区最近两年的记录数（排序依据，但退成小字）。数字加粗，跟后面的说明文字分开 */
 .hc-hist { font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .hc-hist b { font-weight: 650; }
-.hc-hist .doubt-part.is-doubt { color: #cf2020; }
 .hc-bar { margin-top: 5px; height: 5px; }
 .hot-card .rank { width: 22px; flex: none; font-size: 12px; }
 .rank {
@@ -239,9 +258,20 @@ input[type="search"] { min-width: 200px; }
 .hot-card .hc-head { padding-right: 22px; } /* 给角标让位 */
 
 /* ---------------- 「待去找 · TODO」：面板里的入口按钮 + 列表页 ---------------- */
-/* 「我的」里的两个入口（我的 TODO / 收集拼图）：并排、各占一半宽度 */
-.my-todo-entry { display: flex; gap: 8px; margin-top: 12px; }
-.my-todo-entry .btn { flex: 1 1 0; min-width: 0; }
+/* 「我的」里的入口（我的 TODO / 我的报告 / 收集拼图）：按文字内容分宽度，放不下整颗折行。
+   ⚠ 这里**不能**用 flex:1 1 30% 切成三等份：「我的 TODO（N）」比另两颗长近一倍
+   （文字 101px vs 54px），三等份在手机上只有 87~110px 宽，
+   加上 .btn 的左右内边距后文字必然顶出边框 —— 320px 视口实测溢出 32px。
+   改成 flex-basis:auto 后，各颗按内容撑开；一行放不下时整颗折行，不做无意义的压缩。
+   （不设 min-width:0：那是「允许压到比文字还窄」的开关，正是溢出的直接原因。） */
+.my-todo-entry { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.my-todo-entry .btn {
+  flex: 1 1 auto; white-space: nowrap;
+  /* 图标 + 文字一行居中 */
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+/* 按钮里的小图标：stroke 用 currentColor，按钮 hover / disabled 时自动跟着变色 */
+.btn-ic { flex: none; width: 15px; height: 15px; }
 /* 「弹出动画」选择行 */
 .my-anim-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; margin-bottom: 14px;}
 .my-anim-row label { font-size: 12.5px; color: var(--text-2); flex: none; }
@@ -787,14 +817,18 @@ html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask,
   .panel-tools .btn { flex: 1 1 100%; }
 
   /* 卡片瘦身：隐去学名 / 目科 / 稀有度条，只保留排名、中文名、保护徽章、
-     历史记录数与「本时段 正常 n 条 · 疑问 n 条」。
+     「本时段 正常 │ 疑问」（大字行）与「N 条近两年记录」（小字行）。
      仍是两张一行，但卡片高度大约减半，整页长度随之大幅缩短。 */
   .hot-card { padding: 8px 10px 9px; gap: 2px; }
-  /* hc-hist（本时段正常/疑问）保留：这是点开卡片前唯一能看出「有几条被标疑」的地方，
-     而且用户明确要求卡片上要显示这两个数。hc-latin（学名）/ hc-sub（目科）这些才是纯装饰。 */
+  /* 这两行都得留：大字行是点开卡片前唯一能看出「有几条被标疑」的地方（用户明确要求显示），
+     hc-latin（学名）/ hc-sub（目科）这些才是纯装饰。 */
   .hc-latin, .hc-sub, .hc-bar { display: none; }
+  /* 卡片窄（两张一行），两段各降一档字号，别让「12 正常 │ 1 疑问」挤成两行 */
+  .hc-foot { padding-top: 4px; gap: 4px; }
+  .hc-foot .seg b { font-size: 14px; }
+  .hc-foot .seg i { font-size: 9.5px; }
+  .hc-foot .hair { height: 10px; }
   .hc-hist { font-size: 10.5px; line-height: 1.5; }
-  .hc-foot { padding-top: 4px; }
 
   /* 概览卡：手机端只留两张 —— 记录鸟种数 + 公开报告（目/科、观鸟报告数、
      鸟种记录条数都是辅助信息，卡片多了要滚很久才看得到榜单）；两列等宽一行排下 */
@@ -872,4 +906,11 @@ html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask,
   .my-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .my-form-row { flex-direction: column; }
   .my-form-row .btn { width: 100%; }
+  /* 三个入口按钮收一点内边距。上了图标之后每颗多占约 21px（15px 图标 + 6px 间距），
+     手机上三颗已塞不进一行 —— 会按内容宽度自然折成两行：
+     「我的 TODO（N）」+「我的报告」一行，「收集拼图」独占一行。这是预期布局；
+     靠的是 flex-basis:auto（放不下的那颗整颗折行），而不是把文字挤出按钮边框。
+     不要改成固定两列栅格：「我的 TODO（N）」在 320px 下需要 146px，
+     硬切一半只有 134px，又会溢出。 */
+  .my-todo-entry .btn { padding: 0 12px; }
 }

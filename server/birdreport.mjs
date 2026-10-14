@@ -154,9 +154,14 @@ export const getDistricts = (cityCode) => api('/front/system/adcode/district', {
 /** 鸟种名录检索（不传条件返回全部 3098 条物种） */
 export const searchTaxons = (params = {}) => api('/front/taxon/search', params);
 
-/** 区域鸟种清单 + 各鸟种记录数（上游叫「热门度」，本项目反向用作稀有度） */
-export const getRegionTaxons = (where, { limit = 2000, page = 1 } = {}) =>
-  api('/front/record/activity/taxon', { ...where, page, limit });
+/**
+ * 区域鸟种清单 + 各鸟种记录数（上游叫「热门度」，本项目反向用作稀有度）
+ *
+ * opts.timeout 可单独放宽上游超时：全国口径的「最近两年」聚合实测要 20 秒，
+ * 贴着默认的 25 秒上限，留出的余量太小（见 historyLoader）。
+ */
+export const getRegionTaxons = (where, { limit = 2000, page = 1, timeout } = {}) =>
+  api('/front/record/activity/taxon', { ...where, page, limit }, timeout ? { timeout } : {});
 
 /** 区域基础统计：鸟种数 / 目数 / 科数 */
 export const getTaxonNum = (where) => api('/front/record/taxon/num', where);
@@ -182,9 +187,39 @@ export const getCityChart = (params) => api('/front/province/summary/chartCity',
 /** 指定市下各区县鸟种数 */
 export const getDistrictChart = (params) => api('/front/province/summary/chartDistrict', params);
 
-/** 记录明细 */
+/** 记录明细（地区维度：按条件里给的 province / 时间等查） */
 export const searchRecords = (where, { limit = 20, page = 1 } = {}) =>
   api('/front/record/activity/search', { ...where, page, limit });
+
+/**
+ * 记录明细（用户维度）：某个用户名**公开过**的观鸟报告，不需要 province。
+ *
+ * 实测（2026-10-14，用户 kkia，limit=1 只读 count）：
+ *   只发 {username, mode, version}              → 89 份
+ *   再显式带上官网那套完整空键（taxonid/province/city/… 全为 ''）→ 89 份（一模一样）
+ *   → 所以**完整键集不是必须的**，官网发全了只是它的表单会把所有字段都序列化出来。
+ *     早期「记录明细必须带 province」的判断是误读 —— 那次失败真正的原因是上游风控
+ *     返回的 code 505，跟缺参数无关。
+ *
+ * `outside_type` 决定疑问数据的取舍（互斥的记录级拆分，实测 88 + 1 = 89）：
+ *   '' 或 不填 → 全部（含被标疑的报告）   0 → 只看正常   1 → 只看疑问
+ * 报告列表要两类都列出（有疑问的把观鸟点标红），所以这里发 '' 而不是照抄官网的 0 ——
+ * 抄了 0 会静悄悄少掉那 1 份有疑问的报告。
+ *
+ * `mode: '1'` 必须有：模糊匹配会把名字里含同一子串的**别人的**报告也算进来。
+ * `version: 'CH4'` 与「人生鸟种」同口径（郑四分类）。
+ */
+export const searchUserRecords = (username, { limit = 20, page = 1 } = {}) =>
+  api('/front/record/activity/search', {
+    username,
+    mode: '1',
+    version: 'CH4',
+    // 空字符串 = 不按疑问与否过滤（见上面实测）；行里的 outside_count 再告诉我们
+    // 每一份报告具体有几条疑问记录，用来标红。
+    outside_type: '',
+    page,
+    limit,
+  });
 
 /** 单份观鸟报告的基本信息（观鸟点 / 时段 / 记录人 / 备注等），按 reportId 查 */
 export const getActivity = (reportId) => api('/front/activity/get', { reportId });

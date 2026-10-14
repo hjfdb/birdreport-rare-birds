@@ -249,8 +249,8 @@ function regionText() {
  *
  * 界面上只有「起始日期 / 结束日期」两个输入框，没有档位按钮。
  *   - 首次打开默认「当天」（起止同一天），与之前的默认行为一致
- *   - 两个日期都清空 = 全部时间；但上游对「不带时间 + 大范围」的聚合会失败，
- *     所以在提示行里明确写出来，避免用户白等一次 20 秒的失败
+ *   - 两个日期都清空 = 全部时间（省份范围仍可查）；但**全国范围**必须两个都填，
+ *     否则数据量会到上千万条（见 renderRegionHint 与 runQuery 的拦截）
  * ---------------------------------------------------------------- */
 
 /** 默认时间范围：当天 */
@@ -265,6 +265,34 @@ function applyTimeState(start, end) {
   state.end = end || '';
   $('inpStart').value = state.start;
   $('inpEnd').value = state.end;
+  renderRegionHint(); // 「全国」那条提示跟日期是否填齐有关，日期一变就重算
+}
+
+/**
+ * 「全国」的即时提示。
+ *
+ * 省份下拉的第一项是「全国」。它**能查**（早先「数据源不提供全国范围」的判断是错的 ——
+ * 那几次真因是 505 风控），但不带时间限制时上游聚合会拉到上千万条
+ * （实测：单日 0.8 万条 / 一周 17.5 万条 / 一个月 62.7 万条 / 无时间 1358 万条），
+ * 所以全国范围内起止日期必须同时给（runQuery 里也会拦一道）。
+ *
+ * 这里在**选中「全国」的当下**就说清楚，而不是等用户点了「查询」才告诉他 ——
+ * 选中的同时也能立刻看到该去填哪两个框。日期填齐后提示改成「较慢」的说明，
+ * 不再重复要求（条件已满足）。非全国范围不显示。
+ */
+function renderRegionHint() {
+  const el = $('regionHint');
+  if (!el) return;
+  if (state.region.province) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  const ranged = !!(state.start && state.end);
+  el.hidden = false;
+  el.innerHTML = ranged
+    ? '已选「<b>全国</b>」：全国范围汇总较慢（首次约 30~60 秒，实测近两年基线要 45 秒），结果会缓存复用。'
+    : '已选「<b>全国</b>」：需要同时填写<b>起始日期</b>与<b>结束日期</b>才能查询 —— 不带时间限制的全国数据量过大（上千万条记录）。';
 }
 
 /* ---------------------------------------------------------------- *
@@ -479,7 +507,7 @@ function syncLiferUi() {
 
   $('myForm').hidden = bound;
   $('myBound').hidden = !bound;
-  syncPuzzleEntry(); // 绑定 / 解绑都会改到「收集拼图」入口的可用性
+  syncUserButtons(); // 绑定 / 解绑都会改到「我的报告」「收集拼图」两个入口的可用性
   if (!bound) {
     $('inpLifer').value = DEFAULT_LIFER_USER;
     $('myEntryCount').hidden = true;
@@ -496,7 +524,7 @@ async function openMy() {
   $('myModal').hidden = false;
   $('selAnim').value = animType; // 动画设置回填
   renderTodoEntry(); // TODO 与是否绑定用户无关，打开面板就先刷新入口按钮上的数量
-  syncPuzzleEntry(); // 拼图要绑定用户才有得比，没绑定就置灰
+  syncUserButtons(); // 「我的报告」「收集拼图」都要绑定用户才有得查，没绑定就置灰
   // 只把光标放进输入框（已绑定时那个框是隐藏的，别去 focus 它）
   if (!state.lifer) $('inpLifer').focus({ preventScroll: true });
   else await loadMyLifelist();
@@ -873,21 +901,36 @@ function syncTodo() {
   if (detail.open && detail.metric === 'todo') renderTodoList();
 }
 
-/** 「我的」里的 TODO 入口按钮：显示当前数量，点击打开列表页（见 openDetail('todo')） */
+/**
+ * 「我的」里的 TODO 入口按钮：显示当前数量，点击打开列表页（见 openDetail('todo')）。
+ *
+ * ⚠ 只写 #myTodoLabel，**不能**写按钮的 textContent —— 那会把按钮里的图标一起抹掉。
+ */
 function renderTodoEntry() {
-  const btn = $('btnMyTodo');
-  if (!btn) return;
-  btn.textContent = `我的 TODO（${todoList.length}）`;
+  const label = $('myTodoLabel');
+  if (!label) return;
+  label.textContent = `我的 TODO（${todoList.length}）`;
 }
 
-/** 「收集拼图」入口：拼图比的是某个人的名单，没绑定就没有可比的对象，置灰并说明原因 */
-function syncPuzzleEntry() {
-  const btn = $('btnMyPuzzle');
-  if (!btn) return;
-  btn.disabled = !state.lifer;
-  btn.title = state.lifer
-    ? `按郑四名录的「科」铺开，看「${state.lifer}」每个科收到了多少`
-    : '先在「我的」里绑定记录中心用户名';
+/**
+ * 「收集拼图」「我的报告」两个入口的可用性：它们都只跟**绑定用户**有关，
+ * 没绑定就没有可查的对象，置灰并说明原因。
+ */
+function syncUserButtons() {
+  const puzzle = $('btnMyPuzzle');
+  if (puzzle) {
+    puzzle.disabled = !state.lifer;
+    puzzle.title = state.lifer
+      ? `按郑四名录的「科」铺开，看「${state.lifer}」每个科收到了多少`
+      : '先在「我的」里绑定记录中心用户名';
+  }
+  const reports = $('btnMyReports');
+  if (reports) {
+    reports.disabled = !state.lifer;
+    reports.title = state.lifer
+      ? `列出「${state.lifer}」在记录中心公开过的观鸟报告`
+      : '先在「我的」里绑定记录中心用户名';
+  }
 }
 
 /** TODO 列表页（弹层视图）：名称 + 能找到的地址；点条目看报告，点「删除」移除 */
@@ -947,6 +990,21 @@ function savePuzzleOpts() {
 }
 
 /** 「我的」里点「收集拼图」→ 打开独立页；关掉后回「我的」 */
+/**
+ * 「我的报告」：打开绑定用户在记录中心**公开过**的报告列表。
+ * 只按 username 查（不带 province / 时间），所以列表的是他全部公开报告，而不是当前榜单的。
+ * 后端 /api/records 会用 searchUserRecords 发完整条件集（缺键会被上游判为异常请求）。
+ */
+function openMyReports() {
+  if (!state.lifer) return;
+  closeMy();
+  openDetail('myReports', {
+    title: `我的报告 · ${state.lifer}`,
+    onlyWhere: { username: state.lifer },
+  });
+  detail.returnToMy = true; // 关掉列表后回「我的」，而不是落到主页面
+}
+
 function openMyPuzzle() {
   if (!state.lifer) return;
   closeMy();
@@ -1420,25 +1478,36 @@ function renderHot(data) {
         (x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : '') +
         iucnBadge(x.iucn);
       const rar = Math.round((x.rarity ?? 0) * 100);
-      // 排序依据是「该地区最近两年记录数」，所以卡片上的大数字也用它；
-      // 本时段的记录数放在下一行，避免「排名 1 却写着 1 条」这种看起来自相矛盾的画面
+      // ⚠ 这两行的分工：**大字行给「本时段」，小字行给「近两年记录」**。
+      // 两行互换过位置与样式 —— 近两年记录数虽然是排序依据，但它退成小字（用户要求），
+      // 大字留给「本时段」(正常|疑问)，一眼看到的是这段时间实际来了什么。
       const hasHist = x.historyCount !== null && x.historyCount !== undefined;
-      const main = hasHist ? x.historyCount : x.count;
-      // 「条」写进标签里而不是单列一个字：这样整行读作「212 条近两年记录」，
-      // 与下面「本时段 正常 n 条 · 疑问 n 条」的单位一致，不会出现「212 近两年记录」这种缺量词的读法
-      const mainLabel = hasHist ? '条近两年记录' : '条本时段记录';
-      // 本时段记录拆成「正常 / 疑问（红色标记）」两块。
-      // 上游按 outside_type 做的是记录级拆分，逐种核对满足「全部 = 正常 + 疑问」，
-      // 所以这里直接用减法得到正常条数，不再多跑一次上游查询。
-      // 不再写「本时段 N 条」这个总数：紧接着的「正常 + 疑问」相加就等于它，
-      // 一行里摆两个总数只会让人多算一次（历史记录数已经是大数字那一行了）。
+      // 本时段记录按上游 outside_type 拆两半：**0 = 没问题的数据（绿）· 1 = 有疑问的数据（红）**。
+      // 上游是按记录级拆的，逐种核对满足「全部 = 正常 + 疑问」，所以直接用减法得到正常条数，
+      // 不再多跑一次上游查询。
       const normalCount = Math.max(0, (Number(x.count) || 0) - (x.doubtCount || 0));
-      const histLine = s.doubtError
-        ? `本时段 ${fmt(x.count)} 条` // 标疑数据取不到，只能给总数
-        : `本时段 正常 <b>${fmt(normalCount)}</b> 条` +
-          ` · <span class="doubt-part${x.doubt ? ' is-doubt' : ''}">疑问 <b>${fmt(x.doubtCount)}</b> 条</span>`;
-      // 上游 AI 半自动标疑的「疑问数据」：站点用红色中文名标出，这里保持一致
-      const doubtBadge = x.doubt ? `<span class="badge doubt" title="上游 AI 标疑：该时段本地区有 ${fmt(x.doubtCount)} 条记录被标记为疑问数据">疑问 ${fmt(x.doubtCount)}</span>` : '';
+      const doubtCount = Number(x.doubtCount) || 0;
+      // 呈两段「数字 + 小字标签」，中间一根发丝线：
+      //   本时段 12 正常 │ 1 疑问
+      // 绿色/红色只落在数字上，标签降成灰色小字 —— 两个大数字夹一根竖线会读成比分，
+      // 加上标签才不会歧义，也不用把「条」这种量词重复两遍。
+      // **为 0 的那一段不渲染**（「0 疑问」是纯噪音，绝大多数卡片都没有疑问记录），
+      // 于是发丝线也只在两段都在时才出现。
+      const nowSegs = s.doubtError
+        ? // 标疑数据取不到：只能给总数，不猜哪半是多少（也就不上绿/红）
+          [{ cls: 'seg', n: x.count, label: '条', tip: '' }]
+        : [
+            { cls: 'seg ok', n: normalCount, label: '正常', tip: `本时段 ${fmt(normalCount)} 条正常记录（outside_type=0）` },
+            { cls: 'seg bad', n: doubtCount, label: '疑问', tip: `本时段 ${fmt(doubtCount)} 条上游标疑的疑问数据（outside_type=1）` },
+          ].filter((seg) => Number(seg.n) > 0);
+      const nowLine = nowSegs
+        .map((seg) => `<span class="${seg.cls}"${seg.tip ? ` title="${esc(seg.tip)}"` : ''}><b>${fmt(seg.n)}</b><i>${seg.label}</i></span>`)
+        .join('<span class="hair" aria-hidden="true"></span>');
+      // 小字行：「N 条近两年记录」。历史数取不到时不再编一个「条本时段记录」——那会和上面
+      // 大字行的数字重复，直接空着（整个榜单的脚注已经说明已按本时段记录数排序）。
+      const histLine = hasHist ? `<b>${fmt(x.historyCount)}</b> 条近两年记录` : '';
+      // 上游 AI 半自动标疑的「疑问数据」不再单独挂徽章：大字行里那个红色的「N 疑问」
+      // 已经说清楚了，同一件事在一张窄卡片上重复两遍只会更挤（中文名仍然标红）。
       // 「未加新」：绑定用户在人生鸟种里没见过这一种（s.liferUser 为空说明没绑定，整块不渲染）。
       // 用青色（不是红/绿）——红已经被「疑问数据」占用，绿在中文语境里是「跌」，都不是好选择。
       const liferBadge = x.lifer
@@ -1468,8 +1537,8 @@ function renderHot(data) {
         </div>
         <div class="hc-latin">${esc(x.latin || '')}</div>
         <div class="hc-sub">${esc([x.order, x.family].filter(Boolean).join(' · '))}</div>
-        <div class="hc-badges">${badges}${newBadge}${liferBadge}${doubtBadge}</div>
-        <div class="hc-foot"><span class="n">${fmt(main)}</span><span class="l">${esc(mainLabel)}</span></div>
+        <div class="hc-badges">${badges}${newBadge}${liferBadge}</div>
+        <div class="hc-foot"><span class="l">本时段</span>${nowLine}</div>
         <div class="hc-hist">${histLine}</div>
         <div class="bar-track hc-bar" title="历史稀有度 ${rar}%（按该地区最近两年记录数，越少越稀有）"><div class="bar-fill" style="width:${Math.max(2, rar)}%"></div></div>
       </div>`;
@@ -1608,6 +1677,18 @@ let runningQueries = 0;
 /** 最近一轮查询的中止开关：加载遮罩上的「取消」按钮用它中止所有在途请求 */
 let currentQueryAbort = null;
 
+/**
+ * 全国范围的门槛说明。
+ *
+ * 上游不带省份也能查（早先「数据源不提供全国范围」的判断是错的 —— 那几次其实是
+ * 撞上了 505 风控），但数据量随窗口急剧膨胀，不加时间限制时实测 1358 万条：
+ *   全国 · 单日 622 种 / 0.8 万条 ｜ 一周 1091 种 / 17.5 万条 ｜ 一个月 1256 种 / 62.7 万条
+ *   全国 · 不带时间 → 2932 种（已截断）/ 1358 万条
+ * 所以要求同时给出起止日期。服务端同样拦截（/api/hot 等返回 needRange）。
+ */
+const NATIONWIDE_NEED_RANGE =
+  '全国范围可以查看，但需要同时选择<b>起始日期</b>与<b>结束日期</b>。不带时间限制的全国查询数据量过大（上千万条记录），上游会长时间无响应。';
+
 async function runQuery() {
   // 每次查询都给「等待」反馈（不只是首次加载）：首次立刻弹遮罩，之后的点击
   // 延迟 200ms 再弹 —— 命中本地缓存时通常毫秒级返回，立刻弹会闪一下反而难看；
@@ -1643,6 +1724,19 @@ async function runQuery() {
   }
 
   const where = currentWhere();
+  // 全国范围的门槛：起止日期必须同时给。拦在发请求之前 ——
+  // 否则会白跑三次上游（榜单 + 概览 + 趋势），全国口径一次就是几十秒。
+  if (!where.province && !(where.startTime && where.endTime)) {
+    finishLoading();
+    state.overview = null;
+    $('overview').innerHTML = '';
+    $('protectionPanel').hidden = true;
+    $('hotTitle').textContent = '本地稀有鸟种排行 · 全国';
+    $('hotList').innerHTML = `<div class="notice">${NATIONWIDE_NEED_RANGE}</div>`;
+    $('listFoot').innerHTML = '';
+    setStatus('', '请先选择起止日期');
+    return;
+  }
   // 定向刷新：只让本次要用的几个缓存键失效，其余缓存继续复用
   const nocache = state.nocache ? { nocache: '1' } : {};
   state.nocache = false;
@@ -1674,14 +1768,15 @@ async function runQuery() {
     state.hot = hot;
     state.trend = trend;
 
-    if (!where.province) {
-      // 数据源不支持全国级鸟种聚合
+    if (hot && hot.needRange) {
+      // 全国范围可以查，但必须同时给起止日期。正常路径下这个分支不会走到
+      // （runQuery 会提前拦下），留在这里是兜底：万一别的入口漏了校验，
+      // 也不会把「全 0 的全国榜单」当成真实结果画出来。
       state.overview = null;
       $('overview').innerHTML = '';
       $('protectionPanel').hidden = true;
       $('hotTitle').textContent = '本地稀有鸟种排行 · 全国';
-      $('hotList').innerHTML =
-        '<div class="notice">数据源不提供全国范围的鸟种排行汇总（查询量过大），请选择具体的省 / 市 / 区县。</div>';
+      $('hotList').innerHTML = `<div class="notice">${NATIONWIDE_NEED_RANGE}</div>`;
       $('listFoot').innerHTML = '';
     } else {
       renderHot(hot);
@@ -1780,6 +1875,8 @@ const METRICS = {
   todo: { kind: 'todo', title: '待去找 · TODO' },
   // 「我的」里点「收集拼图」：郑四名录按科铺开，逐种标出是否已加新（要请求接口）
   puzzle: { kind: 'puzzle', title: '收集拼图' },
+  // 「我的」里点「我的报告」：绑定用户在记录中心公开过的报告（按用户名查，与地区/日期无关）
+  myReports: { kind: 'report', title: '我的报告' },
 };
 
 const detail = {
@@ -1812,8 +1909,10 @@ async function openDetail(metric, opts = {}) {
     kind: m.kind,
     metric,
     mode: m.kind === 'taxon' ? 'client' : 'server',
-    // 打开瞬间把查询条件定格，之后改地区 / 时间不影响这个已经打开的弹层
-    where: { ...currentWhere(), ...(opts.where || {}) },
+    // 打开瞬间把查询条件定格，之后改地区 / 时间不影响这个已经打开的弹层。
+    // onlyWhere：整份替换掉条件（「我的报告」这类只看用户、与地区/时间无关的入口用），
+    // 不然会把当前榜单的 province / 时间一起带上，查出来的就不是「我的全部报告」了。
+    where: opts.onlyWhere ? { ...opts.onlyWhere } : { ...currentWhere(), ...(opts.where || {}) },
     rows: [],
     view: [],
     page: 1,
@@ -2016,7 +2115,12 @@ function detailSubText() {
     // 上游只给公开报告，且单页最多 50 份，所以「上游总数」与「本页条数」都要说清楚
     const ov = state.overview || {};
     const total = m.total ?? detail.rows.length;
-    if (detail.metric === 'taxonReports') {
+    if (detail.metric === 'myReports') {
+      // 用户维度：上游只给公开报告，且拿不到「这位用户一共上传了多少份」，
+      // 所以不做「未公开」的推算（那需要总数，减不出来就会误导）。
+      parts.push(`公开报告 <strong>${fmt(total)}</strong> 份，本页 <strong>${fmt(detail.rows.length)}</strong> 份`);
+      if (total > DETAIL_REPORT_PAGE_SIZE) parts.push(`共 ${detail.pages} 页，用下方按钮翻页`);
+    } else if (detail.metric === 'taxonReports') {
       // 按单个鸟种收窄时**不能**套用概览的 reportNum / openReportNum —— 那是整个地区的
       // 数字，减出来的「未公开份数」跟这一种鸟对不上，会给出一个误导性的值。所以这里
       // 只报这一种鸟的公开报告数，不提「未公开」。
@@ -2055,12 +2159,19 @@ function reportRow(x, no, compact = false) {
   const span = x.startTime && x.endTime ? `${x.startTime.slice(5, 16)} ~ ${x.endTime.slice(11, 16)}` : '';
   // 这一列只显示「查看」：点整行打开应用内的「报告详情」（编号在详情页里给出）
   const link = `<span class="rep-link" title="查看报告详情">查看 ›</span>`;
+  // 这份报告里含被上游标疑的记录（`outside_count > 0`）→ 观鸟点标红，跟明细里
+  // 「疑问数据」用同一套红色，扫一眼就知道哪几条要复核。
+  const doubts = Number(x.outsideCount) || 0;
+  const titleCell =
+    `<td class="d-name${doubts ? ' is-doubt' : ''}"` +
+    (doubts ? ` title="这份报告有 ${fmt(doubts)} 条记录被上游标疑（疑问数据）"` : '') +
+    `>${esc(x.pointName || '—')}</td>`;
   // 按单个鸟种收窄时只留「发现点 / 发现人 / 时间」：一份报告里往往有几十种鸟，
   // 「区县」和「鸟种数」在这个语境下不说明任何问题，反而把表撑宽。
   if (compact) {
     return `<tr class="is-jump" data-report-id="${esc(x.reportId || '')}">
       <td class="ta-c num">${no}</td>
-      <td class="d-name">${esc(x.pointName || '—')}</td>
+      ${titleCell}
       <td data-label="发现人">${esc(x.username || '—')}</td>
       <td class="d-dim" data-label="时间">${esc(span)}</td>
       <td class="d-dim mono">${link}</td>
@@ -2068,7 +2179,7 @@ function reportRow(x, no, compact = false) {
   }
   return `<tr class="is-jump" data-report-id="${esc(x.reportId || '')}">
     <td class="ta-c num">${no}</td>
-    <td class="d-name">${esc(x.pointName || '—')}</td>
+    ${titleCell}
     <td class="d-dim" data-label="区县">${esc([x.city, x.district].filter(Boolean).join(' '))}</td>
     <td class="d-dim" data-label="时段">${esc(span)}</td>
     <td class="ta-r num strong" data-label="鸟种数">${fmt(x.taxonCount)}</td>
@@ -2306,6 +2417,7 @@ function bind() {
     state.region.district = '';
     await loadCities();
     regionPendingHint();
+    renderRegionHint(); // 选中「全国」时立刻给出提示
   });
   $('selCity').addEventListener('change', async (e) => {
     state.region.city = e.target.value;
@@ -2329,6 +2441,8 @@ function bind() {
   });
   // 改完日期直接回车也能查
   for (const id of ['inpStart', 'inpEnd']) {
+    // 日期一改就刷新「全国」那条提示，但不自动查询（与地区下拉一致，等用户点「查询」）
+    $(id).addEventListener('change', () => applyTimeState($('inpStart').value, $('inpEnd').value));
     $(id).addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -2554,6 +2668,14 @@ function bind() {
     openDetail('todo');
     detail.returnToMy = true;
   });
+  // 「我的」里的「我的报告」：要绑定用户才有得查，没绑定时按钮是禁用的
+  $('btnMyReports').addEventListener('click', () => {
+    if (!state.lifer) {
+      showToast('先在「我的」里绑定记录中心用户名');
+      return;
+    }
+    openMyReports();
+  });
   // 「我的」里的「收集拼图」：要绑定用户才有得比，没绑定时按钮是禁用的
   $('btnMyPuzzle').addEventListener('click', () => {
     if (!state.lifer) {
@@ -2648,6 +2770,7 @@ async function restoreRegion(init) {
   applyTimeState(init.start, init.end);
   restoreTools(init);
   await restoreRegion(init);
+  renderRegionHint(); // 恢复完地区再算一次：applyTimeState 那次还不知道省份
 
   // 把归一化后的条件写回地址栏与本地存储，保证三者一致
   persist();

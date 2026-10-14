@@ -33,6 +33,7 @@ import {
   getDistrictChart,
   searchTaxons,
   searchRecords,
+  searchUserRecords,
   getActivity,
   getActivityTaxons,
   getMemberTimeline,
@@ -68,6 +69,14 @@ const HOT_TTL_MS = Number(process.env.HOT_TTL_MS || 24 * 60 * 60 * 1000);
  * 一个月内所有请求都命中本地，不再向上游发这份慢查询。
  */
 const HISTORY_TTL_MS = Number(process.env.HISTORY_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+/**
+ * 全国口径的历史稀有度查询要单独放宽上游超时。
+ * 省份口径通常 1~2 秒，全国口径实测 20 秒（1495 种 / 1129 万条），
+ * 贴着 api() 默认的 25 秒上限 —— 余量太小，一旦超时就会降级成
+ * 「按本时段记录数排序」，榜单口径会静默改变。这里给足 90 秒。
+ * （省份口径仍用默认 25 秒，不让原本该快速失败的请求被拖长）
+ */
+const HISTORY_NATIONAL_TIMEOUT_MS = Number(process.env.HISTORY_NATIONAL_TIMEOUT_MS || 90 * 1000);
 /**
  * 行政区字典（省 / 市 / 区县三级）缓存一个月：区划码是静态参考数据，基本不变。
  * 跟着 10 分钟的统计缓存反复回源没有意义 —— 上游偶发 500 时，它还会把首次
@@ -235,6 +244,25 @@ function regionLabel(where) {
 }
 
 /**
+ * 「全国」范围的门槛：**必须同时给起止两个日期**。
+ *
+ * 上游对不带省份的聚合查询其实是接受的 —— 当年「数据源不提供全国范围」的判断是错的，
+ * 真实原因是那几次撞上了 505 风控（与本轮探针的复核一致）。但代价确实随窗口急剧膨胀
+ * （2026-10 实测，均为 limit=2000）：
+ *   全国 · 单日        →  622 种 /     0.8 万条
+ *   全国 · 一周        → 1091 种 /    17.5 万条
+ *   全国 · 一个月      → 1256 种 /    62.7 万条
+ *   全国 · 不带时间    → 2932 种（limit 已截断）/ 1358 万条 ← 就是用户说的「数据量太大」
+ * 而且榜单排序依赖的「最近两年」基线在无省份时更重（实测 1495 种 / 1129 万条 / 20 秒）。
+ *
+ * 所以无省份时起止日期必须**同时**给，否则一律短路、不做无谓的上游调用。
+ * 有 province 时不受此限 —— 时间可任意留空的原有行为完全不变。
+ */
+function nationalNeedsRange(where) {
+  return !where.province && !(where.startTime && where.endTime);
+}
+
+/**
  * 只保留行政区条件的 where —— 「历史」口径用。
  * 「历史」= 当前选择的区域 + 固定的「最近两年」窗口（时间由 loadHistory 自己加，
  * 不再来自用户选的时间），也不带记录检索条件 ——
@@ -380,9 +408,11 @@ const historyLoader = (region, startTime, endTime) => async () => {
   // 这条查询又慢又偶发 500：回源时把实际请求参数、返回行数与耗时都打进日志，便于排障 / 对账。
   // 参数与服务端最终发给上游的完全一致（直辖市在这里已经是「只有 province」的形态）。
   const where = { ...region, startTime, endTime };
+  // 全国口径（无 province）实测要 20 秒，单独放宽超时；省份口径沿用默认
+  const timeout = region.province ? undefined : HISTORY_NATIONAL_TIMEOUT_MS;
   const t0 = Date.now();
-  console.log(`[api] 历史稀有度回源：${JSON.stringify(where)}（page=1 limit=2000）`);
-  const r = await getRegionTaxons(where, { limit: 2000 });
+  console.log(`[api] 历史稀有度回源：${JSON.stringify(where)}（page=1 limit=2000${timeout ? ` timeout=${timeout}ms` : ''}）`);
+  const r = await getRegionTaxons(where, { limit: 2000, timeout });
   const rows = r.data || [];
   console.log(`[api] 历史稀有度取回：${rows.length} 行 / count=${r.count ?? '?'}，耗时 ${Date.now() - t0}ms`);
   const byId = {};
@@ -407,7 +437,9 @@ const historyLoader = (region, startTime, endTime) => async () => {
  */
 async function loadHistory(where) {
   const region = regionOnlyWhere(where);
-  if (!region.province) return { byId: {}, byLatin: {}, speciesCount: 0, meta: null, error: '缺少区域条件' };
+  // region 可以为空 = 全国口径（实测 2025-01-01~今天：1495 种 / 1129 万条 / 20 秒，能过）。
+  // 调用方（/api/hot、/api/taxons）已用 nationalNeedsRange 挡住「全国 + 无时间」的情况，
+  // 所以到这里 national 一定带了起止日期，不会退化成无限制的全表聚合。
   // 窗口 = 去年 1 月 1 日 ~ 今天（"最近两年"）。起点进缓存键、跨年自动换键；
   // 结束时间是取数当天的日期，但**不进键** —— 否则每天一个新键，等于天天回源。
   const startTime = historyWindowStart();
@@ -1443,8 +1475,9 @@ const routes = {
   // 概览统计
   async 'GET /api/overview'(q) {
     const where = buildWhere(q);
-    if (!where.province) {
-      return { region: '全国', where, unsupported: true, taxonNum: 0, orderNum: 0, familyNum: 0, reportNum: 0, openReportNum: 0, privacyReportNum: 0, recordCount: 0, reportNumSubset: 0, raw: {} };
+    // 全国可以查，但必须同时给起止日期（见 nationalNeedsRange 的实测数据）
+    if (nationalNeedsRange(where)) {
+      return { region: '全国', where, unsupported: true, needRange: true, taxonNum: 0, orderNum: 0, familyNum: 0, reportNum: 0, openReportNum: 0, privacyReportNum: 0, recordCount: 0, reportNumSubset: 0, raw: {} };
     }
     const key = whereKey(where, 'overview');
     const { value, meta } = await cached(key, () => loadOverview(where), q.get('nocache') === '1');
@@ -1470,15 +1503,17 @@ const routes = {
   // 三份口径分开缓存：榜单 24 小时、历史 24 小时、疑问标记 24 小时，互不影响。
   async 'GET /api/hot'(q) {
     const where = buildWhere(q);
-    // 上游对全国级别的鸟种聚合查询会超时（500 系统内部异常），这里直接短路。
+    // 全国范围**可以查**（早先「上游会 500」的结论是 505 风控被误读），只是必须带起止日期 ——
+    // 无时间限制的全国聚合实测 1358 万条，见 nationalNeedsRange。
     // 注意与「绑定用户的人生鸟种」区分：那个查询**带 username**，结果集只有几百行，
     // 即使不带 province 上游也能正常返回（见 lifelistLoader 的实测记录）。
     const liferUserEarly = (q.get('liferUser') || '').trim();
-    if (!where.province) {
+    if (nationalNeedsRange(where)) {
       return {
         region: '全国',
         where,
         unsupported: true,
+        needRange: true,
         stat: {
           totalSpecies: 0, speciesCount: 0, recordSum: 0, returned: 0, levelKnownCount: 0, coverage: 0,
           national1: 0, national2: 0, sanYou: 0, chinaEndemic: 0, threatened: 0, minCount: 0, maxCount: 0,
@@ -1606,9 +1641,9 @@ const routes = {
   // 「该地区最近两年（去年 1 月 1 日起）的记录数」计算并排序。
   async 'GET /api/taxons'(q) {
     const where = buildWhere(q);
-    if (!where.province) {
+    if (nationalNeedsRange(where)) {
       return {
-        region: '全国', where, unsupported: true, total: 0, speciesCount: 0, recordSum: 0,
+        region: '全国', where, unsupported: true, needRange: true, total: 0, speciesCount: 0, recordSum: 0,
         doubtCount: 0, doubtRecordSum: 0, doubtSpeciesCount: 0, doubtError: '',
         ...LIFER_EMPTY, liferUser: (q.get('liferUser') || '').trim(), list: [],
       };
@@ -1811,10 +1846,17 @@ const routes = {
   // 报告 / 记录明细。上游限制：单页 limit > 50 会直接返回空，不传 limit 会 500。
   // 这里**只取上游的一页**（默认每页 10 条），翻页由前端一页一次请求驱动 ——
   // 不再把 10 页一次性抓回来聚合成全量列表（既慢又容易触发上游风控）。
+  //
+  // 两种用法（二选一）：
+  //   ▸ 地区维度：给 province（+ 时间等）→ 该地区的公开报告
+  //   ▸ 用户维度：给 username → 这个人在记录中心公开过的报告（**不需要省份**，
+  //     上游的 activity/search 支持；此前「必须带 province」的判断是错的，见 searchUserRecords 的说明）
   async 'GET /api/records'(q) {
     const where = buildWhere(q);
-    if (!where.province) {
-      return { region: '全国', where, unsupported: true, page: 1, limit: RECORDS_PAGE_SIZE, total: 0, totalPages: 1, returned: 0, hasMore: false, list: [] };
+    const user = (where.username || '').trim();
+    // 用户维度（我的报告）不需要省份；地区维度的全国查询则要带起止日期
+    if (!user && nationalNeedsRange(where)) {
+      return { region: '全国', where, unsupported: true, needRange: true, page: 1, limit: RECORDS_PAGE_SIZE, total: 0, totalPages: 1, returned: 0, hasMore: false, list: [] };
     }
 
     const page = Math.max(1, Math.floor(Number(q.get('page')) || 1));
@@ -1823,7 +1865,7 @@ const routes = {
     const { value, meta } = await cached(
       whereKey(where, `records:${page}:${limit}`),
       async () => {
-        const r = await searchRecords(where, { limit, page });
+        const r = user ? await searchUserRecords(user, { limit, page }) : await searchRecords(where, { limit, page });
         const seen = new Set();
         const list = [];
         for (const d of Array.isArray(r.data) ? r.data : []) {
@@ -1963,8 +2005,8 @@ const routes = {
   // 逐月趋势
   async 'GET /api/trend'(q) {
     const where = buildWhere(q);
-    if (!where.province) {
-      return { region: '全国', where, unsupported: true, months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, taxonCount: 0, reportCount: 0 })) };
+    if (nationalNeedsRange(where)) {
+      return { region: '全国', where, unsupported: true, needRange: true, months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, taxonCount: 0, reportCount: 0 })) };
     }
     const key = whereKey(where, 'trend');
     const { value, meta } = await cached(key, async () => {
