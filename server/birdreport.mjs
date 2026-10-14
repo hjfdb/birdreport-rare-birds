@@ -124,7 +124,11 @@ export async function api(path, params = {}, { retries = 2, timeout = 25000 } = 
             : code === 505 || code === 405
               ? '，可能访问过于频繁，请稍后重试'
               : '';
-        const err = new Error(`上游返回异常（code ${code}）${hint}`);
+        // 上游的 msg 里常带官方原话（例如「请访问 xxx 输入验证码」），比我们自己猜的提示更有用，
+        // 所以透传出去；但要截断，别让一整页 HTML 灌进前端提示条。
+        const raw = typeof json.msg === 'string' ? json.msg.replace(/\s+/g, ' ').trim() : '';
+        const tail = raw && raw.length <= 160 && !/[<>]/.test(raw) ? `｜上游说明：${raw}` : '';
+        const err = new Error(`上游返回异常（code ${code}）${hint}${tail}`);
         err.noRetry = true;
         throw err;
       }

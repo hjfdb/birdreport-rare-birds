@@ -380,6 +380,17 @@ input[type="search"] { min-width: 200px; }
 
 /* ---------------- 「我的」面板 ---------------- */
 .modal-my { width: min(620px, 100%); }
+
+/* ---------------- 限流验证码浮层 ---------------- */
+/* 官方验证码页用 iframe 内嵌（它没有 X-Frame-Options / CSP，可以嵌）。
+   宽度收窄到跟那个小表单相称，高度给足 —— 验证码图 + 输入框 + 按钮都要露出来。 */
+.modal-captcha { width: min(520px, 100%); }
+.captcha-tip { margin: 0; padding: 2px 20px 12px; font-size: 12.5px; color: var(--text-2); line-height: 1.7; }
+.captcha-tip.is-ok { color: #1f7a4d; font-weight: 550; }
+.captcha-done { padding: 0 20px 12px; }
+.captcha-done .btn { width: 100%; }
+.captcha-body { flex: none; height: 330px; border-top: 1px solid var(--border); background: #fff; }
+#captchaFrame { display: block; width: 100%; height: 100%; border: 0; }
 .my-body { padding-bottom: 18px; }
 .my-intro { margin: 0 0 10px; font-size: 12.5px; color: var(--text-2); line-height: 1.75; }
 .my-intro strong { color: var(--text); }
@@ -913,4 +924,8 @@ html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask,
      不要改成固定两列栅格：「我的 TODO（N）」在 320px 下需要 146px，
      硬切一半只有 134px，又会溢出。 */
   .my-todo-entry .btn { padding: 0 12px; }
+
+  /* 验证码浮层：手机上交出一点高度，避免遮罩被顶满、底部按钮够不着 */
+  .modal-captcha { width: 100%; }
+  .captcha-body { height: 300px; }
 }

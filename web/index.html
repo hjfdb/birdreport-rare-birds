@@ -315,6 +315,37 @@
     <div class="pv-body" id="pvBody"></div>
   </div>
 
+  <!-- 记录中心限流（code 505 / 405）时的验证码浮层：验证码在应用内解决，不跳出应用。
+       两个前提都实测过：
+         1) 官方验证页 /home/code/verify.html 既没有 X-Frame-Options、也没有 CSP frame-ancestors，
+            可以直接 iframe 嵌入；
+         2) iframe 里文档的 Origin 就是 https://www.birdreport.cn，它发出的验证请求对上游
+            完全合法（上游对非同源 Origin 是直接回 403 的），所以不需要服务端代理。
+       验证通过时官方页会执行 parent.layer.close(...)，父窗口就是本页 —— app.js 里补了一个
+       同名的 window.layer 来接住这个信号（见那边的说明）。
+       放在 DOM 最后：它要能盖住「我的」/ 明细等任何已打开的弹层。 -->
+  <div id="captchaModal" class="modal-mask" hidden>
+    <div class="modal modal-captcha" role="dialog" aria-modal="true" aria-labelledby="captchaTitle">
+      <div class="modal-head">
+        <h3 id="captchaTitle">记录中心限流 · 输入验证码</h3>
+        <button class="modal-close" id="captchaClose" aria-label="关闭" title="关闭并返回主页面（Esc）">×</button>
+      </div>
+
+      <!-- 验证通过后出现在**顶部**的返回按钮（用户要求：处理完成顶部给个关闭按钮） -->
+      <div class="captcha-done" id="captchaDone" hidden>
+        <button class="btn btn-primary" id="captchaDoneBtn" type="button">✓ 验证通过 · 关闭并返回主页面</button>
+      </div>
+
+      <p class="captcha-tip" id="captchaTip">
+        记录中心认为你当前的网络访问过于频繁。输入下面这张验证码即可<b>立即解封</b>（按 IP 记，同一网络下的设备一起解封）。
+        <br />图片是空白？点一下图片可以「换一张」；若一直是空白，说明当前网络其实没被封，直接关掉重新查询即可。
+      </p>
+      <div class="captcha-body">
+        <iframe id="captchaFrame" title="记录中心验证码" referrerpolicy="no-referrer-when-downgrade"></iframe>
+      </div>
+    </div>
+  </div>
+
   <!-- 轻提示（底部浮条）：加入 / 移除 TODO 等即时反馈 -->
   <div class="toast" id="toast" aria-live="polite"></div>
 

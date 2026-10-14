@@ -141,17 +141,98 @@ function showLoading(text) {
 
 /**
  * 错误提示统一出口。上游限流（code 505 / 405）时给一条可操作的出路：
- * 记录中心的验证码是**按 IP 记的**（验证码图片接口实测无 Set-Cookie），
- * 同一网络下过一次验证码，本机服务端的请求会一起解封；不想看验证码也可以等几分钟。
+ * 记录中心的验证码是**按 IP 记的**，同一网络下过一次验证码，本机服务端的请求会一起解封；
+ * 不想看验证码也可以等几分钟。
+ *
+ * 验证在**应用内**完成：官方那页没有 X-Frame-Options、也没有 CSP frame-ancestors，可以 iframe 嵌；
+ * 它取图 / 提交验证都走 api.birdreport.cn，而 iframe 的文档 Origin 就是官网，所以 CORS 天然合法，
+ * 不需要我们在服务端做代理。
  */
-const CAPTCHA_URL = 'https://www.birdreport.cn/home/code/verify.html';
+const CAPTCHA_PAGE = 'https://www.birdreport.cn/home/code/verify.html';
+
+/**
+ * 接住官方验证码页的「验证通过」回调。
+ *
+ * 那一页原本跑在官网自己的 layui 弹层里，验证成功后执行的是：
+ *   var index = parent.layer.getFrameIndex(window.name);
+ *   parent.layer.close(index);
+ * 我们把它 iframe 嵌进来之后，**父窗口就是本页** —— 所以在这里补一个同名的
+ * window.layer，就能原样接住这个信号，既不用改上游页面（跨域，也改不了），
+ * 也不用轮询猜「到底过了没有」。缺这个对象时它会抛 TypeError，我们就无从得知结果。
+ *
+ * 只补它实际用到的两个方法：getFrameIndex 的返回值它只在 close 里回传，随便给个 0；
+ * close 就是「验证通过」的那一刻。
+ */
+window.layer = {
+  getFrameIndex: () => 0,
+  close: () => onCaptchaPassed(),
+};
+
+let captchaPassed = false;
+
+/** 打开限流验证码浮层（验证码在应用内解决，不跳系统浏览器） */
+function openCaptcha() {
+  const m = $('captchaModal');
+  if (!m || !m.hidden) return;
+  captchaPassed = false;
+  $('captchaDone').hidden = true;
+  const tip = $('captchaTip');
+  tip.classList.remove('is-ok');
+  // 实测发现：记录中心那张验证码图（front/code/visited/generate）在「当前网络其实没被封」时
+  // 会返回 200 + image/jpeg 但**内容 0 字节**，页面上就是一张裂图。这不是我们能修的（跨域、且
+  // 官方自己在浏览器里直接打开也一样），所以这里把两种可能都写给用户，别让人干等。
+  tip.innerHTML =
+    '记录中心认为你当前的网络访问过于频繁。输入下面这张验证码即可<b>立即解封</b>（按 IP 记，同一网络下的设备一起解封）。' +
+    '<br />图片是空白？点一下图片可以「换一张」；若一直是空白，说明当前网络其实没被封，直接关掉重新查询即可。';
+  // 每次打开都重新载入：验证码有时效，而且上一次的验证状态不该被复用
+  const f = $('captchaFrame');
+  f.src = 'about:blank';
+  f.src = CAPTCHA_PAGE;
+  m.hidden = false;
+  $('captchaClose').focus();
+}
+
+/** 关掉浮层（顺带停掉 iframe，别让验证码页在后台继续跑） */
+function closeCaptcha() {
+  const m = $('captchaModal');
+  if (!m || m.hidden) return;
+  m.hidden = true;
+  $('captchaFrame').src = 'about:blank';
+}
+
+/** 官方页回调：验证通过（见上面 window.layer 的说明） */
+function onCaptchaPassed() {
+  if (captchaPassed) return;
+  captchaPassed = true;
+  const tip = $('captchaTip');
+  tip.classList.add('is-ok');
+  tip.textContent = '验证通过，记录中心已解封（同一网络下通用）。';
+  $('captchaDone').hidden = false;
+  $('captchaDoneBtn').focus();
+}
+
+/** 验证通过后点「关闭并返回主页面」：收起所有弹层 + 重新查一次 */
+function captchaDoneAndBack() {
+  closeCaptcha();
+  // 「返回主页面」要真的回到主页面：浮层可能是在明细 / 报告 / 「我的」之上打开的
+  const pv = $('photoViewer');
+  if (pv && !pv.hidden) closePhotos();
+  if (!$('myModal').hidden) closeMy();
+  if (detail.open) closeDetail();
+  showToast('已解封，正在重新查询…');
+  runQuery();
+}
+
 function errNoticeHtml(prefix, message) {
   const msg = String(message || '');
   if (/code\s*(505|405)/.test(msg)) {
+    // 用按钮而不是 <a target="_blank">：APK 里 WebView 默认不新开窗口，那个链接会被
+    // 交给系统浏览器打开，等于把用户踢出应用（见 MainActivity 的 onCreateWindow）。
+    // 改成在本页开浮层，验证完关掉就回到主页面。
     return (
       `<div class="notice error">${esc(prefix)}${esc(msg)}<br />` +
-      `被记录中心限流了：去<a href="${CAPTCHA_URL}" target="_blank" rel="noreferrer">输入一次验证码</a>即可解封` +
-      `（同一网络下通用，不用等），或过几分钟再试。</div>`
+      `被记录中心限流了：<button class="btn btn-mini captcha-open" type="button">输入一次验证码</button>` +
+      ` 即可立即解封（按 IP 记，同一网络下的设备一起解封），或过几分钟再试。</div>`
     );
   }
   return `<div class="notice error">${esc(prefix)}${esc(msg)}</div>`;
@@ -2032,7 +2113,13 @@ function closeDetail() {
  * 报告详情 → 回明细列表；从「我的」进的列表 → 回「我的」（closeDetail 里已有）。
  * ---------------------------------------------------------------- */
 window.__birdHandleBack = () => {
-  // 图片查看器在最上层
+  // 限流验证码浮层在最上层（它能盖住任何已打开的弹层）
+  const cm = $('captchaModal');
+  if (cm && !cm.hidden) {
+    closeCaptcha();
+    return true;
+  }
+  // 图片查看器在其次
   const pv = $('photoViewer');
   if (pv && !pv.hidden) {
     closePhotos();
@@ -2600,7 +2687,12 @@ function bind() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    // 图片查看器在最上层，先关它
+    // 限流验证码浮层在最上层，先关它
+    if (!$('captchaModal').hidden) {
+      closeCaptcha();
+      return;
+    }
+    // 图片查看器在其次
     const pv = $('photoViewer');
     if (pv && !pv.hidden) {
       closePhotos();
@@ -2636,6 +2728,20 @@ function bind() {
     detail.page += 1;
     if (detail.mode === 'server') reloadDetail();
     else renderDetail();
+  });
+
+  // ---- 限流验证码浮层 ----
+  $('captchaClose').addEventListener('click', closeCaptcha);
+  $('captchaDoneBtn').addEventListener('click', captchaDoneAndBack);
+  $('captchaModal').addEventListener('click', (e) => {
+    if (e.target === $('captchaModal')) closeCaptcha(); // 点遮罩关闭（点 iframe 里不会冒泡上来）
+  });
+  // 505 提示里的「输入一次验证码」按钮是动态插进 innerHTML 的，用事件委托接
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('.captcha-open');
+    if (!btn) return;
+    e.preventDefault();
+    openCaptcha();
   });
 
   // ---- 「我的」：绑定用户名 / 解绑 / 只看未加新 / 重新获取名单 ----
