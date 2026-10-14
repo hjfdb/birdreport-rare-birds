@@ -548,8 +548,27 @@ html.anim-bounce .modal { animation: bounceIn .34s ease; }
 html.anim-bounce .modal-mask.is-closing .modal { animation: bounceOut .17s ease-in forwards; }
 html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask, html.anim-none .photo-viewer { animation: none; }
 
+/* ---------------- 弹层内部的视图切换（明细列表 ⇄ 报告详情） ----------------
+   上面那套只管「开弹层」。层内换视图原本是直接换 innerHTML 的硬切 —— 所以在报告明细里
+   点「查看」进报告详情是一点过渡都没有。这里补一组 push / pop：进去从右侧推入、
+   返回从左侧推回，跟「翻了一页」的直觉一致。
+
+   动画挂在容器 `#detailBody` 上而不是内容上：换 innerHTML 不会打断容器上正在播的动画，
+   于是「转圈 → 内容」能由一条动画连到底，不会中途跳一下。
+
+   没跟随 `html.anim-*`：那套是「弹层怎么冒出来」（用户选的是 zoom / bounce 之类），
+   这里是层内导航，套 bounce 会很怪；只跟随「关闭动画」与系统「减少动态效果」。 */
+@keyframes panePush { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: none; } }
+@keyframes panePop { from { opacity: 0; transform: translateX(-26px); } to { opacity: 1; transform: none; } }
+@keyframes paneSettle { from { opacity: .45; } to { opacity: 1; } }
+.pane-push { animation: panePush .24s cubic-bezier(.2, .85, .3, 1); }
+.pane-pop { animation: panePop .24s cubic-bezier(.2, .85, .3, 1); }
+.pane-settle { animation: paneSettle .18s ease-out; }
+html.anim-none .pane-push, html.anim-none .pane-pop, html.anim-none .pane-settle { animation: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .modal-mask, .modal, .loading-mask, .photo-viewer { animation: none; }
+  .pane-push, .pane-pop, .pane-settle { animation: none; }
   .toast { transition: none; }
 }
 

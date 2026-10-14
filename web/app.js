@@ -133,6 +133,69 @@ function setAnim(t) {
 }
 applyAnim();
 
+/**
+ * 弹层**内部**的视图切换动画（明细列表 ⇄ 报告详情）。
+ *
+ * 上面那套弹出动画只管「开弹层」，层内换视图原本是直接换 innerHTML 的硬切 —— 所以
+ * 在报告明细里点「查看」进报告详情，是一点过渡都没有的。这里补 push / pop：
+ * 进去从右侧推入、返回从左侧推回。
+ *
+ * 动画挂在容器 `#detailBody` 上而不是内容上：换 innerHTML 不会打断容器上正在播的
+ * 动画，于是「转圈 → 内容」由一条动画连到底，不会中途跳一下。
+ * 见 style.css 里 `.pane-*` 那段（为什么不跟随 anim-zoom / anim-bounce）。
+ */
+const PANE_ANIMS = ['pane-push', 'pane-pop', 'pane-settle'];
+/** class → @keyframes 名（style.css 里定义），用来认领 animationend 事件 */
+const PANE_KEYFRAMES = { 'pane-push': 'panePush', 'pane-pop': 'panePop', 'pane-settle': 'paneSettle' };
+const PANE_NAV_MS = 240; // 与 .pane-push / .pane-pop 的时长保持一致
+let paneNavUntil = 0;
+function paneAnimOff() {
+  return (
+    document.documentElement.classList.contains('anim-none') ||
+    !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  );
+}
+function clearPaneAnim(el) {
+  for (const k of PANE_ANIMS) el.classList.remove(k);
+}
+/**
+ * 播一次层内切换动画。
+ *
+ * 播完必须把 class 摘掉：动画会随元素「display:none → 显示」一起重播，而弹层关掉再打开
+ * 正好就是这条路径 —— 留着 class 的话，重新打开「报告明细」会在弹层淡入的同时
+ * 又莫名其妙地播一次侧推。
+ */
+function playPaneAnim(el, kind) {
+  clearPaneAnim(el);
+  void el.offsetWidth; // 强制重排，保证同名动画能重播（否则连点两次看不出第二次）
+  el.classList.add(kind);
+  const done = (e) => {
+    // animationend 会冒泡，后代元素（比如转圈的 spinner）的事件要滤掉
+    if (e.target !== el || e.animationName !== PANE_KEYFRAMES[kind]) return;
+    el.classList.remove(kind);
+    el.removeEventListener('animationend', done);
+  };
+  el.addEventListener('animationend', done);
+}
+/** 层内导航：pane-push = 进详情，pane-pop = 返回列表。总是重播，会覆盖正在播的 settle。 */
+function paneNav(kind) {
+  const el = $('detailBody');
+  if (!el) return;
+  clearPaneAnim(el);
+  if (paneAnimOff()) {
+    paneNavUntil = 0;
+    return;
+  }
+  playPaneAnim(el, kind);
+  paneNavUntil = Date.now() + PANE_NAV_MS;
+}
+/** 内容落地：只有进场动画已经播完才补一下淡入，否则会把它打断（直接跳到尾帧）。 */
+function paneSettle() {
+  const el = $('detailBody');
+  if (!el || paneAnimOff() || Date.now() < paneNavUntil) return;
+  playPaneAnim(el, 'pane-settle');
+}
+
 function showLoading(text) {
   $('loadingText').textContent = text || '正在汇总数据…';
   $('loading').classList.remove('is-closing');
@@ -1985,6 +2048,10 @@ const detail = {
 async function openDetail(metric, opts = {}) {
   const m = METRICS[metric];
   if (!m) return;
+  // 弹层**已经开着**时再切视图（例如 TODO 列表里点条目看「报告明细」）：
+  // 元素一直是显示的，modal 的弹出动画不会重播 —— 那条路径原本是硬切，
+  // 所以自己补一次层内切换动画（见 paneNav）。
+  const swapping = !$('detailModal').hidden;
   Object.assign(detail, {
     open: true,
     kind: m.kind,
@@ -2016,6 +2083,7 @@ async function openDetail(metric, opts = {}) {
   $('detailFoot').hidden = false;
   $('detailSub').innerHTML = '';
   $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取明细…</p></div>';
+  if (swapping) paneNav('pane-push'); // 弹层没动、只有内容换了：补一次推入
   $('dPageInfo').textContent = '';
   $('dSearch').value = '';
   $('dSearch').placeholder = m.kind === 'taxon' ? '筛选中文名 / 学名 / 英文名' : '在本页内筛选观鸟点 / 记录人 / 区县';
@@ -2351,6 +2419,7 @@ async function openReport(reportId) {
   $('detailSub').innerHTML = '';
   $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取报告…</p></div>';
   $('detailBody').scrollTop = 0;
+  paneNav('pane-push'); // 进报告详情：从右侧推入（层内换视图原本是硬切）
   try {
     const r = await API('report', { reportId, liferUser: state.lifer, ...detail.where });
     // 期间可能已经点了「返回」或换了另一份报告：迟到的响应直接丢弃
@@ -2372,6 +2441,7 @@ function closeReport() {
   $('detailFoot').hidden = false;
   $('detailTitle').textContent = detail.listTitle || '明细';
   renderDetail();
+  paneNav('pane-pop'); // 返回列表：从左侧推回，跟「进详情」方向相反
 }
 
 function renderReport(r) {
@@ -2423,6 +2493,7 @@ function renderReport(r) {
       ${r.note ? `<div class="rp-note">备注：${esc(r.note)}</div>` : ''}
     </div>
     <div class="rp-list">${items || '<div class="notice">这份报告没有鸟种明细。</div>'}</div>`;
+  paneSettle(); // 内容落地：若「推入」已播完，补一下淡入，避免硬切
 }
 
 /* ---------------------------------------------------------------- *
