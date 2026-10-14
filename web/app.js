@@ -60,6 +60,7 @@ const state = {
   // state.lifer 是「拿这个人的名单来比对谁没加新」。参数名也因此分开（username / liferUser）。
   lifer: '',
   liferInfo: null, // 最近一次 /api/user-lifelist 的结果，供「我的」面板展示
+  puzzle: null, // 最近一次 /api/lifer-puzzle 的结果（收集拼图），只在打开拼图时才有
   liferNocache: false, // 一次性开关：下一次查询忽略人生鸟种缓存（不影响地区榜单缓存）
   hot: null,
   trend: null,
@@ -453,6 +454,8 @@ function restoreRecordFilters(init) {
 function setLifer(name) {
   state.lifer = name || '';
   state.liferInfo = null;
+  // 换人 / 解绑后旧拼图必须作废：它是给上一个人铺的，留着会张冠李戴
+  state.puzzle = null;
   // 解绑后「只看未加新」就没有意义了：把筛选项一并回落，避免筛出一个空榜单
   if (!state.lifer && state.filter === 'lifer') state.filter = 'all';
   $('selFilter').value = state.filter;
@@ -476,6 +479,7 @@ function syncLiferUi() {
 
   $('myForm').hidden = bound;
   $('myBound').hidden = !bound;
+  syncPuzzleEntry(); // 绑定 / 解绑都会改到「收集拼图」入口的可用性
   if (!bound) {
     $('inpLifer').value = DEFAULT_LIFER_USER;
     $('myEntryCount').hidden = true;
@@ -492,6 +496,7 @@ async function openMy() {
   $('myModal').hidden = false;
   $('selAnim').value = animType; // 动画设置回填
   renderTodoEntry(); // TODO 与是否绑定用户无关，打开面板就先刷新入口按钮上的数量
+  syncPuzzleEntry(); // 拼图要绑定用户才有得比，没绑定就置灰
   // 只把光标放进输入框（已绑定时那个框是隐藏的，别去 focus 它）
   if (!state.lifer) $('inpLifer').focus({ preventScroll: true });
   else await loadMyLifelist();
@@ -745,13 +750,32 @@ function renderMyPanel(stat) {
   if (ll) {
     // 「精确匹配」写在这里而不是只写在说明段里：这是最容易出错、也最容易被静默改回去的一环
     // （模糊匹配会把名字含相同子串的别的用户算进来），摆在数字旁边才好核对。
-    sub.textContent = `共 ${fmt(ll.speciesCount)} 种鸟 · ${fmt(ll.recordSum)} 条记录 · 精确匹配`;
+    // 「郑四分类」四个字要写在数字旁边：用户会拿官网的数字来核对，
+    // 官网查询页固定的口径是 郑四(CH4) + 精确匹配，这里必须和他一致才好对账。
+    // 这里的三个数（1066 / 15963 / 8）就是官网查询页显示的那三个，照抄不加工，
+    // 用户点开官网一比对就能对上；并集（1068 种 / 15978 条）只在列表里体现。
+    const cleanN = ll.normalSpeciesCount || ll.speciesCount;
+    const cleanRec = ll.normalRecordSum != null ? ll.normalRecordSum : ll.recordSum;
+    sub.textContent = `共 ${fmt(cleanN)} 种鸟 · ${fmt(cleanRec)} 条记录 · 郑四分类 · 精确匹配`;
+    // 名录外的种只在真有的时候才提一句：总种数只算能对上郑四名录的种，
+    // 把对不上的偷偷加进去数字就会虚高（旧版「福州老兵 2000 种」就是这么来的）。
+    // 用 CH4 取数后这里通常是 0，一律不显示任何说明条。
+    const offCount = ll.offCatalogCount || 0;
+    const offNote = offCount
+      ? `<div class="notice">另有 <b>${fmt(offCount)}</b> 种不在郑四名录内（${fmt(ll.offCatalogRecordSum || 0)} 条记录），未计入总种数</div>`
+      : '';
+    // 「总鸟种数」并排两个数：绿色 = 有正常记录的种数，红色 = 疑问种数（都取服务端给的原值，
+    // 就是官网那两个数）。疑问走红色，与榜单卡片上「疑问（红）> 未加新（青）」的配色一致。
+    const doubtN = Number(ll.doubtSpeciesCount) || 0;
     stats.innerHTML =
       `<div class="my-cell is-clickable" id="myTaxonCell" role="button" tabindex="0" title="点击查看全部鸟种列表">
         <div class="mk">总鸟种数<span class="more">查看列表 ›</span></div>
-        <div class="mv">${fmt(ll.speciesCount)}<small>种</small></div>
+        <div class="mv"><span class="mv-clean">${fmt(cleanN)}</span><small>种</small>` +
+      (doubtN ? `<span class="mv-doubt">${fmt(doubtN)} 疑问</span>` : '') +
+      `</div>
       </div>` +
-      myCell('累计记录条数', ll.recordSum, '条');
+      myCell('累计记录条数', cleanRec, '条') +
+      offNote;
   } else {
     sub.textContent = state.lifer ? '正在读取名单…' : '';
     stats.innerHTML = '';
@@ -856,6 +880,16 @@ function renderTodoEntry() {
   btn.textContent = `我的 TODO（${todoList.length}）`;
 }
 
+/** 「收集拼图」入口：拼图比的是某个人的名单，没绑定就没有可比的对象，置灰并说明原因 */
+function syncPuzzleEntry() {
+  const btn = $('btnMyPuzzle');
+  if (!btn) return;
+  btn.disabled = !state.lifer;
+  btn.title = state.lifer
+    ? `按郑四名录的「科」铺开，看「${state.lifer}」每个科收到了多少`
+    : '先在「我的」里绑定记录中心用户名';
+}
+
 /** TODO 列表页（弹层视图）：名称 + 能找到的地址；点条目看报告，点「删除」移除 */
 function renderTodoList() {
   if (!todoList.length) {
@@ -877,6 +911,142 @@ function renderTodoList() {
       <button class="todo-del" type="button" data-del-id="${esc(x.taxonId)}" title="从 TODO 移除">删除</button>
     </div>`
       )
+      .join('') +
+    '</div>';
+}
+
+/* ---------------------------------------------------------------- *
+ * 「收集拼图」：把郑四名录按**科**铺开，标出哪些种已经加新
+ *
+ * 与「未加新」是同一份名单的两种看法：
+ *   ▸ 未加新：拿**榜单**比名单 → 这个地区还剩哪些没加新（跟地区 / 日期走）
+ *   ▸ 拼图：  拿**名录**比名单 → 全国的科里收到了多少（只跟绑定用户走）
+ * 所以拼图不读 state.hot，换地区 / 换日期都不该让它变 —— 前端也就不传这些条件。
+ *
+ * 分组、去重、命中判定全在服务端（见 server/index.mjs 的 puzzleLoader），
+ * 这里只负责画：按科一张卡，科内一格一种，已收集的上色、未收集的灰色。
+ * ---------------------------------------------------------------- */
+
+/** 两个勾选项存本机：切换「看不看灰色格子」是高频操作，下次打开该保持原样 */
+const PUZZLE_OPTS_KEY = 'birdreport.puzzle.v1';
+const puzzleOpts = (() => {
+  const def = { showMissing: true, showEmpty: false };
+  try {
+    const raw = JSON.parse(localStorage.getItem(PUZZLE_OPTS_KEY) || 'null');
+    return raw && typeof raw === 'object' ? { ...def, ...raw } : def;
+  } catch (e) {
+    return def;
+  }
+})();
+function savePuzzleOpts() {
+  try {
+    localStorage.setItem(PUZZLE_OPTS_KEY, JSON.stringify(puzzleOpts));
+  } catch (e) {
+    /* 隐私模式：忽略，只影响记忆 */
+  }
+}
+
+/** 「我的」里点「收集拼图」→ 打开独立页；关掉后回「我的」 */
+function openMyPuzzle() {
+  if (!state.lifer) return;
+  closeMy();
+  openDetail('puzzle');
+  detail.returnToMy = true;
+}
+
+/** 取回拼图数据（跟地区 / 日期无关，所以不带 currentWhere） */
+async function loadPuzzle(nocache = false) {
+  if (!state.lifer) return;
+  state.puzzle = null;
+  $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在按郑四名录逐科铺开…</p></div>';
+  try {
+    const r = await API('lifer-puzzle', { user: state.lifer, ...(nocache ? { nocache: '1' } : {}) });
+    state.puzzle = r;
+  } catch (e) {
+    state.puzzle = { families: [], error: e.message };
+  }
+  // 取数期间用户可能已经把弹层关了，这时别再往空壳里画
+  if (detail.open && detail.kind === 'puzzle') renderPuzzle();
+}
+
+/** 单格：已收集上色 + 记录次数，未收集灰色。tl 是给鼠标悬停看的学名 */
+const pzTile = (s) =>
+  `<span class="pz-tile${s.got ? ' is-got' : ''}" title="${esc(s.latin || '')}${s.got ? '' : ' · 还没有记录'}">` +
+  `${esc(s.name)}</span>`;
+
+function renderPuzzle() {
+  const p = state.puzzle;
+  if (!p) return;
+  const sub = $('detailSub');
+  const body = $('detailBody');
+
+  if (p.error) {
+    sub.innerHTML = '';
+    body.innerHTML = `<div class="notice error">${esc(p.error)}</div>`;
+    return;
+  }
+
+  const cat = p.catalog || {};
+  const total = cat.species || 0;
+  const got = p.collectedInCatalog || 0;
+  const pctAll = total ? Math.round((got / total) * 1000) / 10 : 0;
+  sub.innerHTML =
+    `郑四名录 <strong>${fmt(cat.families)}</strong> 科 / <strong>${fmt(total)}</strong> 种 · ` +
+    `你已收集 <strong>${fmt(got)}</strong> 种（<strong>${pctAll}%</strong>）· ` +
+    `有记录的科 <strong>${fmt(p.collectedFamilies)}</strong>` +
+    (p.unmatched ? ` · <span class="warn">另有 ${fmt(p.unmatched)} 种不在郑四名录内，未计入</span>` : '');
+
+  const kw = detail.q.trim().toLowerCase();
+  let fams = (p.families || []).filter((f) => puzzleOpts.showEmpty || f.collected > 0);
+  if (kw) {
+    fams = fams.filter(
+      (f) =>
+        f.family.toLowerCase().includes(kw) ||
+        f.order.toLowerCase().includes(kw) ||
+        f.species.some((s) => s.name.toLowerCase().includes(kw) || String(s.latin || '').toLowerCase().includes(kw))
+    );
+  }
+
+  // 勾选条吸顶：科多的时候要一直能切换，不用滚回顶部
+  const tools =
+    '<div class="pz-tools">' +
+    `<label class="pz-check"><input type="checkbox" id="pzMissing"${puzzleOpts.showMissing ? ' checked' : ''}>显示未收集的（灰色）</label>` +
+    `<label class="pz-check"><input type="checkbox" id="pzEmpty"${puzzleOpts.showEmpty ? ' checked' : ''}>显示还没开始的科</label>` +
+    `<span class="pz-count">${fmt(fams.length)} 科${kw ? '（已筛选）' : ''}</span>` +
+    '</div>';
+
+  if (!fams.length) {
+    body.innerHTML =
+      tools +
+      `<div class="notice">${
+        kw ? '没有匹配的科 / 鸟种。' : '还没有任何科的记录 —— 先在记录中心留下观鸟记录，再回来看看。'
+      }</div>`;
+    return;
+  }
+
+  body.innerHTML =
+    tools +
+    '<div class="pz-list">' +
+    fams
+      .map((f) => {
+        const pct = f.total ? Math.round((f.collected / f.total) * 100) : 0;
+        // 「显示未收集的」关掉时只留已收集的格；科内本来就没收集的（showEmpty 打开时会出现）
+        // 会退化成空盒子，给一句说明而不是留一片空白
+        const shown = puzzleOpts.showMissing ? f.species : f.species.filter((s) => s.got);
+        const tiles = shown.length
+          ? shown.map(pzTile).join('')
+          : '<span class="pz-none">这个科还没有开始</span>';
+        return `<div class="pz-fam${f.done ? ' is-done' : ''}">
+      <div class="pz-head">
+        <span class="pz-fam-name">${esc(f.family)}</span>
+        <span class="pz-order">${esc(f.order)}</span>
+        ${f.done ? '<span class="pz-done">已集满</span>' : ''}
+        <span class="pz-ratio"><b>${fmt(f.collected)}</b> / ${fmt(f.total)} · ${pct}%</span>
+      </div>
+      <div class="pz-bar"><i style="width:${Math.max(2, pct)}%"></i></div>
+      <div class="pz-tiles">${tiles}</div>
+    </div>`;
+      })
       .join('') +
     '</div>';
 }
@@ -904,13 +1074,17 @@ function renderLiferList() {
   }
   const rows = ll.list;
   const doubts = rows.filter((x) => x.doubt).length;
-  // 副标题只保留「共 N 种 · x 种疑问」，其余说明文字不显示
+  // 副标题只保留「共 N 种 · x 种疑问」，其余说明文字不显示。
+  // 种数跟面板上的绿色数字同源（有正常记录的种数），疑问数跟红色同源 —— 两处必须对得上。
+  const headN = ll.normalSpeciesCount || ll.speciesCount;
   $('detailSub').innerHTML =
-    `共 <strong>${fmt(ll.speciesCount)}</strong> 种` +
+    `共 <strong>${fmt(headN)}</strong> 种` +
     (doubts
       ? ` · <span class="doubt-foot"><i class="doubt-dot"></i><strong>${fmt(doubts)}</strong> 种疑问</span>`
       : '');
+  // 提示放在**列表最上面**：放在 1000 多行之后等于没放，用户永远看不到。
   $('detailBody').innerHTML =
+    liferNoticeBlock(ll) +
     '<div class="rp-list">' +
     rows
       .map((x) => {
@@ -923,7 +1097,7 @@ function renderLiferList() {
         const sub = [x.order, x.family].filter(Boolean).join(' · ');
         // 加新时间与地点（今年的才有）：地点只留最后一段（区县），别把「省 市 区」整串铺上来
         const when = x.firstTime
-          ? `<span class="rp-when">加新 ${esc(x.firstTime)}${x.firstPlace ? ' · ' + esc(x.firstPlace.split(' ').slice(-1)[0]) : ''}</span>`
+          ? `<span class="rp-when"> ${esc(x.firstTime)}${x.firstPlace ? ' · ' + esc(x.firstPlace.split(' ').slice(-1)[0]) : ''}</span>`
           : '';
         return `<div class="rp-item">
         <div class="rp-main">
@@ -936,6 +1110,23 @@ function renderLiferList() {
       })
       .join('') +
     '</div>';
+}
+
+/**
+ * 人生鸟种列表顶部的说明条：只在**真有**对不上郑四名录的种时才出现
+ * （用 CH4 取数后通常是 0，所以一般什么都不显示）。
+ */
+function liferNoticeBlock(ll) {
+  const off = Array.isArray(ll.offCatalog) ? ll.offCatalog : [];
+  if (!off.length) return '';
+  const sum = off.reduce((s, x) => s + (Number(x.count) || 0), 0);
+  const head = off.slice(0, 20).map((x) => x.name).join('、');
+  return (
+    `<div class="notice">另有 <b>${fmt(off.length)}</b> 种、共 <b>${fmt(sum)}</b> 条记录不在郑四名录内` +
+    `（迷鸟 / 异名 / 名录未收录），<b>未计入上面的种数</b>：${esc(head)}` +
+    (off.length > 20 ? ` 等 ${fmt(off.length)} 种` : '') +
+    '</div>'
+  );
 }
 
 /** 绑定：只校验「非空」，剩下的交给服务端去查真伪 */
@@ -956,6 +1147,7 @@ async function doBindLifer() {
     }
     state.liferInfo = r;
     state.lifer = name;
+    state.puzzle = null; // 换了绑定对象，旧的收集拼图作废
     if (state.filter === 'lifer') {
       state.filter = 'all';
       $('selFilter').value = 'all';
@@ -1586,6 +1778,8 @@ const METRICS = {
   liferList: { kind: 'liferList', title: '我的人生鸟种' },
   // 「我的」里点「我的 TODO」按钮：待去找清单页（存在本机，零请求）
   todo: { kind: 'todo', title: '待去找 · TODO' },
+  // 「我的」里点「收集拼图」：郑四名录按科铺开，逐种标出是否已加新（要请求接口）
+  puzzle: { kind: 'puzzle', title: '收集拼图' },
 };
 
 const detail = {
@@ -1676,6 +1870,16 @@ async function openDetail(metric, opts = {}) {
     return;
   }
 
+  // 「收集拼图」：数据要现取（与地区 / 日期无关，只看绑定的用户），没有分页
+  if (m.kind === 'puzzle') {
+    $('btnDetailBack').hidden = false; // 返回 = 关掉并回到「我的」
+    $('detailFoot').hidden = true; // 不翻页
+    $('dSort').hidden = true; // 排序固定为「收集比例高的在前」
+    $('dSearch').placeholder = '筛选科名 / 目名 / 鸟种名';
+    loadPuzzle();
+    return;
+  }
+
   await reloadDetail();
 }
 
@@ -1753,6 +1957,13 @@ window.__birdHandleBack = () => {
 };
 
 function applyDetailFilter(resetPage) {
+  // 拼图视图不吃 detail.rows（它的「行」是名录里的科），筛选词直接交给 renderPuzzle 用；
+  // 不在这里分岔的话，在拼图里搜东西会毫无反应（因为下面筛的是空数组）
+  if (detail.kind === 'puzzle') {
+    if (resetPage) detail.page = 1;
+    renderPuzzle();
+    return;
+  }
   const kw = detail.q.trim().toLowerCase();
   let rows = detail.rows;
   if (kw) {
@@ -2342,6 +2553,24 @@ function bind() {
     closeMy();
     openDetail('todo');
     detail.returnToMy = true;
+  });
+  // 「我的」里的「收集拼图」：要绑定用户才有得比，没绑定时按钮是禁用的
+  $('btnMyPuzzle').addEventListener('click', () => {
+    if (!state.lifer) {
+      showToast('先在「我的」里绑定记录中心用户名');
+      return;
+    }
+    openMyPuzzle();
+  });
+  // 拼图里的两个勾选项：切换后只重画列表，不重新请求
+  $('detailBody').addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || detail.kind !== 'puzzle') return;
+    if (t.id === 'pzMissing') puzzleOpts.showMissing = t.checked;
+    else if (t.id === 'pzEmpty') puzzleOpts.showEmpty = t.checked;
+    else return;
+    savePuzzleOpts();
+    renderPuzzle();
   });
   // 「我的」里的弹出动画选择：立即生效并记住，给一条提示
   $('selAnim').addEventListener('change', (e) => {

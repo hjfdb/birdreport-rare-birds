@@ -542,33 +542,75 @@ async function catalogLookup() {
  * 匹配方式与历史稀有度 / 疑问标记保持一致：先按 taxon_id 对，对不上退回拉丁名
  * （同一鸟种在不同名录版本下 id 不同，拉丁名才是稳定的）。判定方向取**并集** ——
  * id 或拉丁名任一命中就算「已加新」，宁可漏报也不能把没见过的种说成见过。
+ *
+ * ⚠ 返回的 byId 是**郑四名录的 id**，不是上游原样给的 id —— 上游会把同一只鸟按
+ * 新旧两套分类各返回一行（见 makeZ4Resolver 的实测记录），不归位的话种数会近乎翻倍。
  * ------------------------------------------------------------------ */
 
+/** 上游返回行数的上限：郑四全国名录约 1500 种，一个人不可能超过它，3000 很宽松 */
+const LIFELIST_LIMIT = 3000;
+
 const lifelistLoader = (user) => async () => {
-  const r = await getRegionTaxons({ username: user, mode: 1 }, { limit: 2000 });
+  // version:'CH4' = 只要郑四分类（见上面的实测对照）。少了它就会新旧两套各回一行、种数翻倍。
+  // mode:1 = 精确匹配用户名，不同一个人的名字里含同一个子串就把他算进来。
+  const r = await getRegionTaxons({ username: user, mode: 1, version: 'CH4' }, { limit: LIFELIST_LIMIT });
   const rows = r.data || [];
-  const byId = {};
-  const byLatin = {};
-  const nameById = {}; // 给「收藏画像」用（名字随行带回来，免得再去名录里猜）
+  // CH4 已保证 id 是郑四的，resolve 只是**兜底**：万一上游哪天回了个本地名录里没有的 id，
+  // 还能按拉丁名找回郑四种，实在找不回就如实报成「名录外」，不硬塞。
+  const resolve = await makeZ4Resolver();
+
+  const byId = {}; // 郑四 id → 记录条数（两套分类的行会累加到同一只鸟上）
+  const byLatin = {}; // 拉丁名（郑四写法 + 上游写法都收）→ 记录条数
+  const nameById = {}; // 郑四 id → {name, latin}，名字一律取郑四的写法
+  const altNamesById = {}; // 郑四 id → 上游出现过的别的写法（旧名），给「加新时间」按名匹配兜底
+  const offByName = {}; // 郑四名录里没有的种：中文名 → {name, latin, count}
+
+  const add = (map, key, n) => {
+    if (key) map[key] = (map[key] || 0) + n;
+  };
+
   for (const t of rows) {
     const n = Number(t.recordcount) || 0;
     if (n <= 0) continue;
-    const id = Number(t.taxon_id) || 0;
-    if (id) {
-      byId[id] = (byId[id] || 0) + n;
-      nameById[id] = { name: t.taxonname || '', latin: t.latinname || '' };
+    const z4 = resolve(t);
+    if (z4) {
+      add(byId, z4.id, n);
+      nameById[z4.id] = { name: z4.name, latin: z4.latin };
+      add(byLatin, latinKey(z4.latin), n);
+      add(byLatin, latinKey(t.latinname), n); // 上游写法（可能是旧名）也登记，比对按并集
+      const up = String(t.taxonname || '').trim();
+      if (up && up !== z4.name) {
+        const list = altNamesById[z4.id] || (altNamesById[z4.id] = []);
+        if (!list.includes(up)) list.push(up);
+      }
+    } else {
+      // 郑四名录里没有（迷鸟、异名、名录未收录）：单独统计，不硬塞进某个科
+      const name = String(t.taxonname || '').trim() || `#${t.taxon_id}`;
+      const rec = offByName[name] || (offByName[name] = { name, latin: String(t.latinname || ''), count: 0 });
+      rec.count += n;
     }
-    const lk = latinKey(t.latinname);
-    if (lk) byLatin[lk] = (byLatin[lk] || 0) + n;
   }
+
+  const speciesCount = Object.keys(byId).length;
+  const offCatalog = Object.values(offByName).sort((a, b) => b.count - a.count);
   return {
     user,
     byId,
     byLatin,
     nameById,
-    speciesCount: Object.keys(byId).length,
-    recordSum: Object.values(byId).reduce((s, n) => s + n, 0),
+    altNamesById,
+    offCatalog,
+    // 种数按郑四算（这才是「我见过多少种鸟」的真身）；名录外的另计，前端如实分开展示
+    speciesCount,
+    offCatalogCount: offCatalog.length,
+    recordSum: Object.values(byId).reduce((s, n) => s + n, 0) + offCatalog.reduce((s, x) => s + x.count, 0),
     rowCount: rows.length,
+    // ⚠ 不能拿上游的 count 判断截断：count 不认 mode —— kkia 传 mode=1 只回 212 行，
+    // count 却仍报模糊口径的 229，`count > rows.length` 必然成立、必然误报。
+    // 真正的截断信号只有一个：行数把 limit 取满了（说明后面还有）。
+    truncated: rows.length >= LIFELIST_LIMIT,
+    // 上游自报的总数，**口径是模糊的**，只作参考，绝不能当种数用
+    upstreamCount: Number(r.count) || 0,
   };
 };
 
@@ -577,13 +619,18 @@ const lifelistLoader = (user) => async () => {
  * 上游失败时返回 null（而不是抛错）—— 「未加新」只是个附加标记，
  * 拿不到就整页照常显示，不能因为一个标记把榜单打挂。
  *
- * 缓存键里的 `u2` 是**口径版本号**，不是装饰：
- * 这份名单的取法变过一次（最初没传 mode，上游按模糊匹配返回，kkia 拿到 229 种；
- * 加上 mode=1 之后才是真的 212 种）。缓存键当时没变，于是旧结果在 24 小时 TTL 里
- * 被继续当作新结果用 —— 页面上看着一切正常，数字却还是错的。
- * 以后再改这份名单的口径（字段、匹配方式、口径范围），就把这里的版本号 +1。
+ * 缓存键里的 `uN` 是**口径版本号**，不是装饰。改过三次，前两次都是「页面看着正常、数字是错的」：
+ *   u1 → u2：最初没传 mode，上游按模糊匹配返回，kkia 拿到 229 种；加 mode=1 后才是真的 212 种。
+ *   u2 → u3：上游对同一只鸟按新旧两套分类各返回一行，种数近乎翻倍
+ *            （福州老兵 2048 行 → 只有 1288 种）；现在按郑四归位。
+ *   u3 → u4：截断判定改成看「行数是否取满 limit」（上游 count 不认 mode，必然误报）。
+ *   u4 → u5：改用上游的 `version:'CH4'` 直接取郑四那一套（福州老兵 2000 种 → 1068 种），
+ *            不再靠拉丁名猜着归位。
+ * 每次都是「口径变了但缓存键没变，旧结果在 24 小时 TTL 里被继续当作新结果用」。
+ * 以后再改这份缓存对象的**形状或语义**（字段、匹配方式、名录口径），就把版本号 +1 ——
+ * 宁可多回源一次，也不要让旧对象被当成新对象读。
  */
-const LIFELIST_KEY_VERSION = 'u2';
+const LIFELIST_KEY_VERSION = 'u5';
 async function loadLifelist(user, nocache = false) {
   if (!user) return null;
   try {
@@ -593,6 +640,11 @@ async function loadLifelist(user, nocache = false) {
       nocache,
       { ttl: LIFELIST_TTL_MS }
     );
+    if (value.truncated) {
+      console.warn(
+        `[api] 用户「${user}」的名单被截断：取满上限 ${LIFELIST_LIMIT} 行还有余（上游自报 ${value.upstreamCount}，仅供参考）—— 种数会少算，需要抬高 LIFELIST_LIMIT`
+      );
+    }
     return { ...value, meta, error: '' };
   } catch (e) {
     console.warn(`[api] 用户「${user}」的人生鸟种取不到，本次不做未加新比对：` + e.message);
@@ -637,23 +689,84 @@ async function loadPrevDaySpecies(where, nocache) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 「按郑四分类取数」—— version=CH4
+ *
+ * 上游 `front/record/activity/taxon` 支持一个 `version` 参数，官网查询页发的是
+ * `"version":"CH4"` —— **CH4 就是郑四分类**，带上它上游只回郑四那一套。
+ *
+ * 不带 version 会怎样（踩过的坑）：
+ *   只给 username（不给 province / 时间）时，上游会把同一只鸟**按新旧两套分类各回一行**。
+ *   实测（2026-10-14，用户「福州老兵」）：
+ *     2048 行 / 2048 个 taxon_id，却只有 **1288 个不同的拉丁名**
+ *     → 760 只鸟各占两行：白冠燕尾(id1214) vs 白额燕尾(id5279)、
+ *       灰伯劳(id658) vs 西灰伯劳(id4715)、旋木雀(id1107) vs 欧亚旋木雀(id5137)…
+ *     即旧名录的小 id（< 4000）与郑四的大 id（4000+）各来一遍，行里没有 version 字段。
+ *   后果：种数近乎翻倍（「我的 · 总鸟种数」显示 2000 种，而中国全部鸟种也就 1500 左右）。
+ *
+ * 加上 `version:'CH4'` 之后（同一用户，实测对照）：
+ *     mode=1                     → 2048 行 / 35435 条   ← 错的
+ *     mode=1 + version=CH4       → 1068 行 / 15978 条
+ *     + outside_type=0（正常）    → 1066 行 / 15963 条   ← 官网查询页显示的就是这个数
+ *     + outside_type=1（疑问）    →    8 行 /    15 条   ← 官网「疑问」显示的就是这个数
+ *   而且 CH4 结果的 taxon_id **全部落在郑四段（4001~5515）且互不重复**，
+ *   所以「按拉丁名把旧名行归位」那套猜测整个可以退休了 —— 上游本来就支持直接指定名录。
+ *
+ * 三个口径的换算关系（1066 / 8 / 1068）：
+ *   outside_type=0 的种 ∩ outside_type=1 的种 = 6 种（这些种既有正常记录也有疑问记录）
+ *   → 单看正常记录 1066 种、单看疑问记录 8 种，**并集**（不带 outside_type）1068 种。
+ *   本项目取并集当「总鸟种数」（这才是「我见过多少种鸟」），其中 8 种挂疑问标记。
+ *
+ * outside_type 语义：0 = 没问题的数据，1 = 有疑问的数据（上游/审核标疑）。
+ * ------------------------------------------------------------------ */
+
+/** 建「上游行 → 郑四种」的归位函数（郑四名录本身有 7 天缓存，这里只建一次索引） */
+async function makeZ4Resolver() {
+  const { value: cat } = await loadCatalog();
+  const byId = new Map();
+  const byLatin = new Map();
+  for (const s of cat.list) {
+    if (s.id) byId.set(s.id, s);
+    const lk = latinKey(s.latin);
+    if (lk && !byLatin.has(lk)) byLatin.set(lk, s);
+  }
+  return (t) => {
+    const id = Number(t.taxon_id) || 0;
+    const lk = latinKey(t.latinname);
+    return (id && byId.get(id)) || (lk && byLatin.get(lk)) || null;
+  };
+}
+
 /**
  * 某个用户名下**被上游标疑**（outside_type=1）的鸟种 → 疑问记录条数。
  * 「我的人生鸟种」列表里给这些种标红用；和名单同节奏缓存 24 小时
  * （每个用户每天最多多查这一次），失败留 60 秒标记防重打。
+ * 同样要按郑四归位，否则旧名那一行的标疑数会挂在名单里不存在的 id 上而丢标。
  */
 const lifelistDoubtLoader = (user) => async () => {
-  const r = await getRegionTaxons({ username: user, mode: 1, outside_type: 1 }, { limit: 2000 });
+  // outside_type:1 = 上游标疑的数据；version 必须和主名单同口径，否则标疑的 id 会挂在不存在的种上
+  const r = await getRegionTaxons(
+    { username: user, mode: 1, version: 'CH4', outside_type: 1 },
+    { limit: LIFELIST_LIMIT }
+  );
+  const resolve = await makeZ4Resolver();
   const byId = {};
+  const offByLatin = {};
   for (const t of r.data || []) {
     const n = Number(t.recordcount) || 0;
-    const id = Number(t.taxon_id) || 0;
-    if (n > 0 && id) byId[id] = (byId[id] || 0) + n;
+    if (n <= 0) continue;
+    const z4 = resolve(t);
+    if (z4) byId[z4.id] = (byId[z4.id] || 0) + n;
+    else {
+      const lk = latinKey(t.latinname);
+      if (lk) offByLatin[lk] = (offByLatin[lk] || 0) + n;
+    }
   }
-  return { byId, speciesCount: Object.keys(byId).length };
+  return { byId, offByLatin, speciesCount: Object.keys(byId).length };
 };
 async function loadLifelistDoubt(user, nocache = false) {
-  const key = `lifelist-doubt|u1|${user}`;
+  // u3：标疑清单也加 version=CH4（u2 是按拉丁名归位、u1 是未归位的旧口径）
+  const key = `lifelist-doubt|u3|${user}`;
   try {
     const { value } = await cached(key, lifelistDoubtLoader(user), nocache, { ttl: LIFELIST_TTL_MS });
     if (value.failed) return null;
@@ -722,6 +835,125 @@ async function loadMemberId(user, nocache = false) {
     return 0;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 「收集拼图」—— 把郑四名录按**科**铺开，标出哪些种已经加新
+ *
+ * 与「未加新」是同一份名单的两种看法：
+ *   ▸ 未加新：拿**榜单**去比对名单 → 「这个地区还剩哪些没加新」（按地区看）
+ *   ▸ 拼图：  拿**名录**去比对名单 → 「全国的科里我收到了多少」（按分类看，与地区无关）
+ * 所以拼图不读 state.hot，跟当前的省 / 市 / 日期完全无关 —— 换地区不该让它变。
+ *
+ * 分组用的是**郑四名录（Z4）**：26 目 / 116 科 / 1595 种，目科字段齐全，
+ * 直接来自名录自身，不再另外维护一份分类表。
+ *
+ * 两个必须说清的口径：
+ *   ▸ 只统计**名录里有**的种。名单来自用户记录，可能含名录外的（迷鸟、异名、旧版名录
+ *     留下的 id），这部分汇不到任何科里 —— 如实报出「名录外 N 种」，不硬塞。
+ *   ▸ 命中判定与「未加新」完全一致：先按 taxon_id，对不上退回拉丁名（`latinKey`），
+ *     任一命中即算已收集。名单与名录可能来自不同名录版本，只认 id 会大面积漏判。
+ * ------------------------------------------------------------------ */
+
+/** 口径版本号：改了这一份拼图的算法（分组依据、命中判定、字段）就 +1，见 lifelist 的同款说明 */
+const PUZZLE_KEY_VERSION = 'p3';
+
+const puzzleLoader = (user) => async () => {
+  const { value: cat } = await loadCatalog();
+  const ll = await loadLifelist(user, false);
+  if (!ll) throw new Error(`用户「${user}」的人生鸟种名单取不到（上游限流或网络异常）`);
+  // 空名单必须当成失败而不是「一种都没收集」：上游对不存在的用户名是正常返回空集，
+  // 照空集铺拼图会得到一整片灰色，看着像「这个人是新手」，结论完全错（同 applyLifer）。
+  if (ll.speciesCount === 0) {
+    throw new Error(`用户「${user}」在观鸟记录中心查不到任何记录 —— 请核对用户名（注意区分大小写）`);
+  }
+
+  const famMap = new Map();
+  const seenIds = new Set();
+  let collectedInCatalog = 0;
+  let duplicateRows = 0;
+
+  for (const s of cat.list) {
+    // 名录里同一 taxon_id 会出现两次：上游把「旧名」和「新名」各存一条，只差 pinyin
+    // （例：松鸡 有一条 pinyin=xifangsongji（旧名「西藏松鸡」）、一条 songji），
+    // 目的是让两种叫法都能被搜到。检索那边按 id 去重了；这里是在**数种**，同理必须去重，
+    // 否则科内总数会虚高、同一只鸟还会占两个格子。
+    if (s.id) {
+      if (seenIds.has(s.id)) {
+        duplicateRows += 1;
+        continue;
+      }
+      seenIds.add(s.id);
+    }
+
+    const byId = ll.byId[s.id];
+    const byLatin = ll.byLatin[latinKey(s.latin)];
+    const count = byId !== undefined ? byId : byLatin !== undefined ? byLatin : 0;
+    const got = byId !== undefined || byLatin !== undefined;
+    if (got) collectedInCatalog += 1;
+
+    const key = `${s.order}||${s.family}`;
+    let g = famMap.get(key);
+    if (!g) {
+      g = { order: s.order || '未标注', family: s.family || '未标注', total: 0, collected: 0, species: [] };
+      famMap.set(key, g);
+    }
+    g.total += 1;
+    if (got) g.collected += 1;
+    g.species.push({ taxonId: s.id, name: s.name, latin: s.latin, got, count });
+  }
+
+  // 科内排序：已收集的排前面（一眼看清这个科收到了哪些），两组内保持名录顺序
+  for (const g of famMap.values()) {
+    g.species = g.species.filter((s) => s.got).concat(g.species.filter((s) => !s.got));
+    g.ratio = g.total ? g.collected / g.total : 0;
+    // 100% 的科单独标出来，前端好给它一个「已完成」的样子
+    g.done = g.collected === g.total && g.total > 0;
+  }
+
+  // 科排序：收集比例高的在前（用户的核心诉求）；同比例时按「已收集数 → 科内总数 → 科名」，
+  // 保证顺序稳定可复现，刷新不会跳来跳去
+  const families = [...famMap.values()].sort(
+    (a, b) =>
+      b.ratio - a.ratio ||
+      b.collected - a.collected ||
+      a.total - b.total ||
+      a.family.localeCompare(b.family, 'zh')
+  );
+
+  return {
+    user: ll.user,
+    catalog: {
+      version: cat.version,
+      prefix: cat.prefix,
+      // species 是**去重后**的种数（名录原始行 cat.list 含 71 组新旧名重复行）；
+      // rows 原样给出，便于对照
+      species: seenIds.size,
+      rows: cat.list.length,
+      duplicateRows,
+      families: famMap.size,
+    },
+    // 名单里对不上名录的种：lifelistSize - collectedInCatalog，前端如实提示，不藏
+    lifelistSize: ll.speciesCount,
+    collectedInCatalog,
+    unmatched: Math.max(0, ll.speciesCount - collectedInCatalog),
+    collectedFamilies: families.filter((f) => f.collected > 0).length,
+    startedFamilies: families.filter((f) => f.collected > 0 && !f.done).length,
+    doneFamilies: families.filter((f) => f.done).length,
+    families,
+  };
+};
+
+/** 取某个用户的收集拼图（与人生名册同节奏缓存 24 小时，避免每次打开都重铺 1595 行） */
+async function loadPuzzle(user, nocache = false) {
+  const { value, meta } = await cached(
+    `puzzle|${PUZZLE_KEY_VERSION}|${user}`,
+    puzzleLoader(user),
+    nocache,
+    { ttl: LIFELIST_TTL_MS }
+  );
+  return { ...value, meta };
+}
+
 
 /** 附在返回体里的空结果，避免各处重复写一大串默认值 */
 const LIFER_EMPTY = {
@@ -1493,7 +1725,17 @@ const routes = {
       const lv = levels[x.taxonId] || {};
       const dq = doubt && doubt.byId[x.taxonId];
       const name = (meta && meta.name) || (hit && hit.name) || `#${x.taxonId}`;
-      const did = dates ? dates.byName[normName(name)] : null;
+      // 「加新时间」上游是按**名字**给的，而名单里的名字已统一成郑四写法 ——
+      // 用户当年加新时记下的可能是旧名（如「白冠燕尾」现已并入「白额燕尾」），
+      // 所以先按郑四名找，找不到再拿上游出现过的别名逐个碰一次。
+      let did = dates ? dates.byName[normName(name)] : null;
+      if (!did && dates) {
+        const alts = (ll.altNamesById && ll.altNamesById[x.taxonId]) || [];
+        for (const alt of alts) {
+          did = dates.byName[normName(alt)];
+          if (did) break;
+        }
+      }
       return {
         taxonId: x.taxonId,
         count: x.count,
@@ -1521,9 +1763,49 @@ const routes = {
       rowCount: ll.rowCount,
       error: '',
       list,
+      // —— 下面三个数就是官网查询页显示的那三个（官网默认发 outside_type=0，疑问另发一次），
+      //    前端「总鸟种数」直接摆它们，用户才好拿官网的数字对账。
+      //    一个种的记录条数 = 正常 + 疑问，所以「条数 - 疑问条数 > 0」就是它有正常记录。
       doubtSpeciesCount: list.filter((x) => x.doubt).length,
+      normalSpeciesCount: list.filter((x) => x.count - (x.doubtCount || 0) > 0).length,
+      normalRecordSum: list.reduce((s, x) => s + Math.max(0, x.count - (x.doubtCount || 0)), 0),
+      // 郑四名录里查不到的种（迷鸟 / 异名 / 名录未收录）：条数如实报出，前端单独提示，
+      // 不混进 speciesCount —— 那个数是「按郑四算的种数」，口径必须干净。
+      offCatalog: ll.offCatalog || [],
+      offCatalogCount: ll.offCatalogCount || 0,
+      offCatalogRecordSum: (ll.offCatalog || []).reduce((s, x) => s + (x.count || 0), 0),
       cache: ll.meta,
     };
+  },
+
+  /**
+   * 「收集拼图」：把郑四名录按科铺开，逐种标出是否已加新。
+   *
+   * 与 /api/user-lifelist 的区别是**比对的一方**：
+   *   后者比榜单（跟地区 / 日期走），这个比全家名录（与地区 / 日期无关，只跟绑定用户走）。
+   * 因此**不接收** province / startTime 等条件 —— 换地区不该让拼图变化。
+   *
+   * 参数：user（推荐）/ username（兼容写法）；nocache=1 强制回源。
+   * 返回体见 puzzleLoader；families 已按「收集比例降序」排好，前端不需要再排。
+   */
+  async 'GET /api/lifer-puzzle'(q) {
+    const user = (q.get('user') || q.get('username') || '').trim();
+    if (!user) {
+      return { user: '', families: [], collectedInCatalog: 0, error: '缺少 user 参数' };
+    }
+    try {
+      const p = await loadPuzzle(user, q.get('nocache') === '1');
+      return { ...p, error: '' };
+    } catch (e) {
+      // 拼图整份都依赖名单：名单取不到就没有可展示的内容，如实报错（不返回半份灰拼图）
+      console.warn(`[api] 用户「${user}」的收集拼图取不到：` + e.message);
+      return {
+        user,
+        families: [],
+        collectedInCatalog: 0,
+        error: `拼图取不到：「${user}」的记录没能从记录中心读到（${e.message}）。稍后再试，或核对用户名。`,
+      };
+    }
   },
 
   // 报告 / 记录明细。上游限制：单页 limit > 50 会直接返回空，不传 limit 会 500。

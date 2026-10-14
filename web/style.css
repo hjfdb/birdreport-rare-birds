@@ -239,9 +239,11 @@ input[type="search"] { min-width: 200px; }
 .hot-card .hc-head { padding-right: 22px; } /* 给角标让位 */
 
 /* ---------------- 「待去找 · TODO」：面板里的入口按钮 + 列表页 ---------------- */
-.my-todo-entry { margin-top: 12px; }
+/* 「我的」里的两个入口（我的 TODO / 收集拼图）：并排、各占一半宽度 */
+.my-todo-entry { display: flex; gap: 8px; margin-top: 12px; }
+.my-todo-entry .btn { flex: 1 1 0; min-width: 0; }
 /* 「弹出动画」选择行 */
-.my-anim-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.my-anim-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; margin-bottom: 14px;}
 .my-anim-row label { font-size: 12.5px; color: var(--text-2); flex: none; }
 .my-anim-row select { flex: 1; min-width: 0; }
 .my-todo { display: flex; flex-direction: column; }
@@ -377,12 +379,20 @@ input[type="search"] { min-width: 200px; }
 .mu-name { font-size: 15px; font-weight: 640; color: #0a6570; word-break: break-all; }
 .mu-sub { font-size: 11.5px; color: var(--text-2); }
 .my-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+/* 「另有 N 种不在郑四名录内」：横跨整行，跟 .stat-grid 里的同款提示一致 */
+.my-stats > .notice { grid-column: 1 / -1; margin-bottom: 0; }
 .my-cell {
   border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; background: var(--surface-2);
 }
 .my-cell .mk { font-size: 11.5px; color: var(--muted); }
 .my-cell .mv { font-size: 19px; font-weight: 660; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .my-cell .mv small { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+/* 「总鸟种数 1060 种 8 疑问」：不含疑问的部分绿、疑问红（两者相加 = 总种数） */
+.my-cell .mv-clean { color: var(--green); }
+.my-cell .mv-doubt {
+  margin-left: 6px; font-size: 12px; font-weight: 620; color: var(--red);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 .my-cell.is-new .mv { color: var(--lifer); }
 .my-cell.is-known .mv { color: var(--green); }
 /* 「总鸟种数」可点：打开人生鸟种全列表 */
@@ -679,6 +689,48 @@ html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask,
 .rep-link { color: var(--primary); text-decoration: none; font-weight: 550; }
 .rep-link:hover { text-decoration: underline; }
 
+/* ---------------- 「收集拼图」（郑四名录按科铺开） ----------------
+   一个科一张卡：科名 + 目名 + 「已收集 / 科内总数 · 比例」+ 进度条 + 一格格鸟种。
+   两种格子：
+     · 已收集 —— 青绿底（沿用 --lifer 那套色，与「未加新」是同一份名单的两种看法）
+     · 未收集 —— 灰底灰字（这里灰色就是「还没有」，与榜单上的青色标记语义不同）
+   已集满的科整卡换成浅青底 + 绿进度条，扫一眼就能看出哪些科收完了。 */
+.pz-tools {
+  position: sticky; top: 0; z-index: 2; background: var(--surface);
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 0 10px; border-bottom: 1px solid var(--border);
+}
+.pz-check {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+  font-size: 12.5px; color: var(--text-2); white-space: nowrap;
+}
+/* 勾选框是本功能的唯一开关，给足点击面积（手机上尤其重要） */
+.pz-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--lifer); cursor: pointer; }
+.pz-count { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.pz-list { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 6px; }
+.pz-fam { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 11px; background: var(--surface-2); }
+.pz-fam.is-done { border-color: #b6e0e3; background: var(--lifer-soft); }
+.pz-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pz-fam-name { font-size: 14px; font-weight: 640; }
+.pz-order { font-size: 11.5px; color: var(--muted); }
+.pz-done {
+  font-size: 11px; font-weight: 600; color: #0a6570; background: var(--surface);
+  border: 1px solid #b6e0e3; border-radius: 5px; padding: 0 5px;
+}
+.pz-ratio { margin-left: auto; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.pz-ratio b { color: var(--lifer); font-weight: 660; }
+.pz-bar { height: 5px; border-radius: 4px; background: #e8ecf3; overflow: hidden; margin: 7px 0 9px; }
+.pz-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #14a3b0, #37c4c0); }
+.pz-fam.is-done .pz-bar i { background: linear-gradient(90deg, #2f9e5f, #4bbd80); }
+.pz-tiles { display: flex; flex-wrap: wrap; gap: 5px; }
+.pz-tile {
+  font-size: 12px; line-height: 1; padding: 5px 8px; border-radius: 6px; white-space: nowrap;
+  background: #eef1f6; color: #9aa3b2; border: 1px solid #e6eaf1;
+}
+.pz-tile.is-got { background: var(--lifer-soft); color: #0a6570; border-color: #b6e0e3; font-weight: 550; }
+.pz-none { font-size: 12px; color: var(--muted); }
+
 /* ---------------- 手机端适配（≤ 720px） ----------------
    桌面版大量使用横向排列（顶栏、查询条件、记录检索、榜单工具栏），窄屏下会互相挤压甚至
    溢出；榜单的 156 张卡片又占了整页高度的大头。这里统一收敛为纵向堆叠，并隐去卡片上的
@@ -795,6 +847,16 @@ html.anim-none .modal-mask, html.anim-none .modal, html.anim-none .loading-mask,
   .dtable:not(.dtable-report) td:nth-child(7) { flex: 1 1 100%; }
   /* 保护等级列是徽章组，跟在数字后面会显得零散，单独起一行并去掉上边距 */
   .dtable:not(.dtable-report) td:nth-child(7) .badges { margin-top: 0; }
+
+  /* 拼图：勾选条允许换行、格子收紧。一格一种，窄屏一行能放下 3~4 个，
+     科多的时候整页才不会长到没法看。 */
+  .pz-tools { gap: 8px 16px; padding: 7px 0 9px; }
+  .pz-count { margin-left: 0; }
+  .pz-list { gap: 10px; padding: 10px 0 4px; }
+  .pz-fam { padding: 9px 10px 10px; }
+  .pz-fam-name { font-size: 13.5px; }
+  .pz-tiles { gap: 4px; }
+  .pz-tile { font-size: 11.5px; padding: 4px 7px; }
 
   /* 顶栏右上角「我的」的尺寸微调（位置规则见上面顶栏那一段）。
      副行（已绑定 xxx / 绑定记录中心用户名）在窄屏不显示：按钮保持一行才不臃肿，

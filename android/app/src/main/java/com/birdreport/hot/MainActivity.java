@@ -230,7 +230,13 @@ public class MainActivity extends Activity {
         web.evaluateJavascript(
                 "(window.__birdHandleBack && window.__birdHandleBack()) ? '1' : '0'",
                 value -> {
-                    if ("1".equals(value)) {
+                    // ⚠ evaluateJavascript 回传的是结果的 **JSON 表示**：JS 返回字符串 '1'，
+                    // 这里拿到的 Java 字符串是带引号的 "\"1\""（三个字符），所以 equals("1")
+                    // 永远不成立 —— 页面明明已经关掉弹层并返回了 true，却被判成「没消费」，
+                    // 紧接着又走 defaultBack()：弹层关掉的同一时刻 App 一路退到桌面。
+                    // 必须先剥掉引号再比。
+                    String v = value == null ? "" : value.replace("\"", "").trim();
+                    if ("1".equals(v)) {
                         return; // 页面自己消费了这次返回（关掉了弹层）
                     }
                     defaultBack();
