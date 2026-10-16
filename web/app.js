@@ -685,6 +685,14 @@ async function openMy() {
   $('myModal').classList.remove('is-closing'); // 若赶上上一次的退场动画，取消它
   $('myModal').hidden = false;
   $('selAnim').value = animType; // 动画设置回填
+  syncWatchRow(); // 稀有监听：开关与「稀有数量」回填（打开面板前可能改过条件）
+  // 顺手读一次最新监听状态（不回源）：面板里那句「本时段 N 种 / 最稀有 M 条」要是新的
+  API('watch')
+    .then((w) => {
+      applyWatchSnapshot(w);
+      syncWatchRow();
+    })
+    .catch(() => { /* 读不到就用已有快照渲染 */ });
   renderTodoEntry(); // TODO 与是否绑定用户无关，打开面板就先刷新入口按钮上的数量
   syncUserButtons(); // 「我的报告」「收集拼图」都要绑定用户才有得查，没绑定就置灰
   // 只把光标放进输入框（已绑定时那个框是隐藏的，别去 focus 它）
@@ -1961,6 +1969,9 @@ async function runQuery() {
     }
 
     setStatus('ok', `已更新 · ${new Date().toLocaleTimeString('zh-CN')}`);
+    // 条件（地区 / 日期 / 检索）变了就顺手同步给监听 —— 「一直监听」靠的就是这一步，
+    // 用户不用手动重开。静默进行（条件没变时服务端直接返回、不回源）。
+    watchSyncConditions();
   } catch (e) {
     if (e && e.name === 'AbortError') {
       // 用户点了「取消」：安静收场 —— 保留页面上的旧结果，不报错
@@ -2192,19 +2203,21 @@ function closeDetail() {
 }
 
 /* ---------------------------------------------------------------- *
- * 稀有监听：按当前条件盯住稀有鸟种，有新发现就在右下角提示
+ * 稀有监听：一直盯着稀有鸟种，有新发现就在右下角提示
  *
  * 三条约定（与服务端 server/watch.mjs 完全一致，判定与去重都在服务端做，
  * 前端只负责「按节拍问一次、有新发现就提示」）：
- *   ① 稀有 = 该地区**最近两年记录数 ≤ 阈值**（默认 3 条，界面可调）
- *   ② 时间窗口 = 开启监听那一刻页面上填的起止日期（**不做滚动窗口**）
+ *   ① 稀有 = 该地区**最近两年记录数 ≤ 数量**（默认 3 条，在「我的」里可调）
+ *   ② **一直监听、条件自动跟随**：监听条件跟着页面上选的地区 / 日期 / 检索走
+ *      （每轮查询成功后静默同步一次，见 watchSyncConditions），不需要手动重开；
+ *      「我的」里只放「是否监听」与「稀有数量」两项
  *   ③ 频率 = 前台定时轮询（默认 10 分钟一次）；页面在后台不发请求，
  *      那段时间交给 Android 端的后台通知
  *
- * ⚠ 阈值是个**绝对条数**，在大范围下很难命中。实测近两年记录数的下界：
+ * ⚠ 「稀有数量」是个**绝对条数**，在大范围下很难命中。实测近两年记录数的下界：
  *   北京市 95 条、北京朝阳区 64 条、全国 286 条 —— 所以默认的 ≤3 条
  *   在市级以上永远返回「0 种」。界面必须把「本时段最稀有的也有 N 条」摊开，
- *   并让阈值可调，否则用户会以为监听坏了。
+ *   并让数量可调，否则用户会以为监听坏了。
  *
  * ⚠ 榜单的本时段清单缓存 24 小时，照抄缓存的话一天都是同一份数据（「每 10 分钟
  *   检查」就成了摆设）。所以服务端每轮检查强制回源（nocache=1），但设了一道
@@ -2220,14 +2233,17 @@ const WATCH_POLL_MIN_MS = 60 * 1000;
 const WATCH_POLL_MAX_MS = 60 * 60 * 1000;
 
 const watchUi = {
-  snapshot: null,   // 最近一次服务端快照（enabled / history / lastError / …）
+  snapshot: null,   // 最近一次服务端快照（enabled / label / history / lastError / …）
   enabled: false,
-  threshold: 3,     // 界面上的阈值（未开启时只存在本地；开启后以服务端为准）
+  everConfigured: false, // 服务端有没有被配过；false = 从没配过，「默认自动监听」就靠它判定
+  threshold: 3,     // 界面上的「稀有数量」（未开启时只存在本地；开启后以服务端为准）
   unread: 0,        // 新发现但还没打开历史记录看的条数（只做角标）
   cardAlerts: [],   // 提示卡上正在列的那几条（点条目要能取回完整信息）
   timer: null,
-  busy: false,      // 用户主动发起的操作（开 / 停 / 立即检查）进行中
+  busy: false,      // 用户主动发起的操作（开 / 关 / 改数量）进行中
+  pendingOn: null,  // 开关的乐观值：请求在途时先按用户点的那个状态显示，回来再以服务端为准
   polling: false,   // 定时轮询进行中
+  syncing: false,   // 条件自动同步进行中（避免并发重复提交）
 };
 
 const watchThresholdLabel = (v) => {
@@ -2273,48 +2289,77 @@ function watchLabelText(where) {
   return [regionText(), range, ...filterSummary()].join(' · ');
 }
 
-/* ---------------- 查询栏那一行：阈值下拉 + 开始/停止 ---------------- */
+/* ---------------- 「我的」面板里那一块：开关 + 稀有数量 + 状态说明 ----------------
+   只放两项是刻意的：条件不用用户管（跟着页面上的地区 / 日期 / 检索自动走），
+   所以这里不出现条件选择，只用一行小字把「现在盯着什么」说清楚。 */
+
+/** 把服务端快照落到界面状态上（各处拿到快照后都走它，省得漏同步某一个字段） */
+function applyWatchSnapshot(w) {
+  watchUi.snapshot = w;
+  watchUi.enabled = !!(w && w.enabled);
+  watchUi.everConfigured = !!(w && w.everConfigured);
+  if (w && w.maxHistoryCount) watchUi.threshold = Number(w.maxHistoryCount);
+  return w;
+}
 
 function syncWatchRow() {
-  const btn = $('btnWatchToggle');
+  const chk = $('chkWatch');
   const sel = $('selWatchThreshold');
   const hint = $('watchRowHint');
-  if (!btn || !sel || !hint) return;
+  if (!chk || !sel || !hint) return;
   const w = watchUi.snapshot;
   const on = !!(w && w.enabled);
 
-  btn.textContent = watchUi.busy ? (on ? '处理中…' : '开启中…') : on ? '停止监听' : '开始监听';
-  btn.classList.toggle('is-on', on);
-  btn.disabled = watchUi.busy;
+  // 请求在途时按用户刚点的那个状态显示，别让开关先跳回去再弹过来
+  chk.checked = watchUi.pendingOn === null ? on : watchUi.pendingOn;
+  chk.disabled = watchUi.busy;
+  const stateText = $('mwSwitchText');
+  if (stateText) {
+    stateText.textContent = watchUi.busy ? '处理中…' : chk.checked ? '监听中' : '已停止';
+  }
   // 请求在途时**别动下拉**：这时快照还是旧的，会看到刚选的档位被弹回去
   if (!watchUi.busy) sel.value = ensureThresholdOption(on ? w.maxHistoryCount : watchUi.threshold);
 
-  if (!on) {
+  if (!chk.checked) {
     hint.innerHTML =
-      '开启后按<b>当前条件</b>（地区 / 日期 / 检索）定期向上游取一次，新出现且<b>最近两年记录数 ≤ 阈值</b>的鸟种会在右下角提示。' +
-      '阈值是个绝对条数 —— 市级以上范围很难命中，可先用「≤ 300 条」试试。';
+      '关掉后不再提醒，<b>历史记录会保留</b>；重新打开会按当前条件重新划一条起跑线（之前的记录还在）。';
     return;
   }
-  const parts = [`已监听 <b>${esc(w.label || '当前条件')}</b>（条件定格在开启那一刻）`];
-  if (w.lastError) parts.push(`<span class="warn">${esc(w.lastError)}</span>`);
+
+  // 状态那一行：先说「盯着什么」，再说「上一轮什么结果」
+  const parts = [];
+  if (w.baselinePending) parts.push('正在按当前条件建立基线…');
+  else if (w.lastError) parts.push(`<span class="warn">${esc(w.lastError)}</span>`);
   else if (w.scanned) {
     parts.push(
       `本时段 ${fmt(w.scanned)} 种，最稀有的一档 ${w.minHistoryCount === null ? '—' : fmt(w.minHistoryCount)} 条`
     );
-  }
+    // 阈值是绝对条数，大范围下命中不了是常态 —— 直接告诉用户该调到多少
+    const th = Number(w.maxHistoryCount) || 0;
+    if (w.minHistoryCount !== null && w.minHistoryCount !== undefined && w.minHistoryCount > th) {
+      parts.push(`<span class="warn">数量 ${watchThresholdLabel(th)} 一种也命中不了，想收到提醒请调到 ${fmt(w.minHistoryCount)} 条以上</span>`);
+    } else if (w.rareCount) {
+      parts.push(`当前命中 ${fmt(w.rareCount)} 种`);
+    }
+  } else parts.push('还没检查过，稍等一会');
+
   // Android 壳里才谈「通知权限」：网页端开着页面就有右下角提示，没有系统通知这回事
   if (ANDROID) {
     let perm = 'granted';
     try {
       perm = ANDROID.notifyState ? ANDROID.notifyState() : 'granted';
     } catch (e) { /* 桥出错按已授权处理，不吓用户 */ }
-    parts.push(
-      perm === 'granted'
-        ? 'Android：应用退到后台也会发系统通知'
-        : '<span class="warn">系统通知权限未开 —— 退到后台时发现新鸟种不会提醒，请到系统设置里允许通知</span>'
-    );
+    if (perm !== 'granted') {
+      parts.push('<span class="warn">系统通知权限未开 —— 应用退到后台时发现新鸟种不会提醒，请到系统设置里允许通知</span>');
+    } else {
+      parts.push('应用退到后台也会发系统通知');
+    }
   }
-  hint.innerHTML = parts.join(' · ');
+
+  hint.innerHTML =
+    `<span class="mw-cond">监听条件：<b>${esc((w && w.label) || '当前条件')}</b>` +
+    `　（地区 / 日期 / 检索一变，这里自动跟着变）</span>` +
+    `<span class="mw-status">${parts.join(' · ')}</span>`;
 }
 
 /* ---------------- 右下角浮标与提示卡 ---------------- */
@@ -2329,7 +2374,8 @@ function renderWatchDock() {
   const dock = $('watchDock');
   if (!dock) return;
   const w = watchUi.snapshot;
-  if (!w || !w.enabled) {
+  // conditions 为空 = 刚启动、页面还没来得及把条件同步过去，这时先不用露面
+  if (!w || !w.enabled || !w.conditions) {
     dock.hidden = true;
     hideWatchCard();
     watchUi.unread = 0;
@@ -2345,7 +2391,7 @@ function renderWatchDock() {
   badge.hidden = watchUi.unread <= 0;
   badge.textContent = watchUi.unread > 99 ? '99+' : String(watchUi.unread);
 
-  const lines = [`监听条件：${w.label || '当前条件'}`, `稀有阈值：${watchThresholdLabel(w.maxHistoryCount)}（近两年记录数）`];
+  const lines = [`监听条件：${w.label || '当前条件'}`, `稀有数量：${watchThresholdLabel(w.maxHistoryCount)}（近两年记录数）`];
   lines.push(`最近检查：${w.lastCheckAt ? fmtTime(w.lastCheckAt) : '—'}`);
   if (w.scanned) lines.push(`本时段扫描 ${fmt(w.scanned)} 种，最稀有 ${w.minHistoryCount === null ? '—' : fmt(w.minHistoryCount)} 条`);
   if (w.lastError) lines.push(`异常：${w.lastError}`);
@@ -2405,32 +2451,47 @@ function ensureNotifyPermission() {
   } catch (e) { /* ignore */ }
 }
 
-/** 开启（或按新条件 / 新阈值重开）监听。重开一律重建基线，但历史记录不清空。 */
-async function watchStart({ reconfig = false } = {}) {
+/**
+ * 把「开关 / 稀有数量 / 条件」写回服务端。
+ *
+ * @param {object}  [o]
+ * @param {boolean} [o.enabled] 不给 = **只同步条件、不动开关**（自动跟随走这条）
+ * @param {boolean} [o.defer]   不让服务端等基线跑完再回（建基线要真回一次上游、几十秒）
+ */
+function watchSave({ enabled, defer = false } = {}) {
   const where = currentWhere();
-  // ⚠ 先把下拉里选的阈值抓下来：下面 syncWatchRow() 会把下拉重置成「上一份快照里的
-  //   阈值」，等真发请求时再读那个 value 就已经被改回去了 —— 表现出来的症状是
-  //   「监听中改阈值没反应」，而请求其实照发（带着旧阈值）。
   const threshold = Number($('selWatchThreshold').value) || watchUi.threshold;
+  const q = { ...where, label: watchLabelText(where), maxHistoryCount: threshold };
+  if (enabled !== undefined) q.enabled = enabled ? '1' : '0';
+  if (defer) q.defer = '1';
+  return API('watch', q, null, 'POST');
+}
+
+/**
+ * 开启监听（首次默认开启 / 重新打开 / 改完稀有数量重来一遍）。
+ * 会把当前页面的条件一起送过去；服务端据此重建基线（不提醒），历史记录与报过的鸟都保留。
+ *
+ * @param {object}  [o]
+ * @param {boolean} [o.reconfig] 改完「稀有数量」的重开（提示语不一样）
+ * @param {boolean} [o.auto]     首次启动的「默认自动监听」（提示语要说清是默认行为、可以关掉）
+ */
+async function watchStart({ reconfig = false, auto = false } = {}) {
+  const where = currentWhere();
   // 「全国」不带时间限制时上游会拉上千万条 —— 服务端也会拦，这里先拦一道，少一次往返
   if (!where.province && !(where.startTime && where.endTime)) {
     renderRegionHint();
-    showToast('「全国」范围要同时填起始与结束日期才能监听');
+    if (!auto) showToast('「全国」范围要同时填起始与结束日期才能监听');
+    syncWatchRow(); // 把刚勾上的开关弹回去
     return;
   }
   const label = watchLabelText(where);
   watchUi.busy = true;
+  watchUi.pendingOn = true;
   syncWatchRow();
   try {
-    const w = await API(
-      'watch',
-      { enabled: '1', ...where, label, maxHistoryCount: threshold },
-      null,
-      'POST'
-    );
-    watchUi.snapshot = w;
-    watchUi.enabled = !!w.enabled;
-    watchUi.threshold = Number(w.maxHistoryCount) || watchUi.threshold;
+    // 首次「默认自动监听」用 defer：建基线要真回一次上游（几十秒），不能让浮标
+    // 和提示干等 —— 服务端会后台把基线建好（这期间不会误报，见 watch.mjs 的 baselinePending）。
+    const w = applyWatchSnapshot(await watchSave({ enabled: true, defer: auto }));
     watchUi.unread = 0;
     hideWatchCard();
     renderWatchDock();
@@ -2441,41 +2502,66 @@ async function watchStart({ reconfig = false } = {}) {
       // 基线没建起来（上游取不到 / 历史口径缺失）：必须让用户当场知道，
       // 否则他会以为「开着呢，等着就行」，其实是空转。
       showToast(`监听已开，但第一轮就遇到问题：${w.lastError}`);
+    } else if (auto) {
+      showToast(`已默认开启稀有监听：${label} · 稀有 ${watchThresholdLabel(w.maxHistoryCount)}（可在「我的」里关掉）`);
+    } else if (reconfig) {
+      showToast(`已按新的稀有数量重启监听：${watchThresholdLabel(w.maxHistoryCount)}`);
     } else {
-      showToast(
-        reconfig
-          ? `已按新阈值重启监听：${watchThresholdLabel(w.maxHistoryCount)}`
-          : `已开始监听：${label} · 稀有 ${watchThresholdLabel(w.maxHistoryCount)}`
-      );
+      showToast(`已开始监听：${label} · 稀有 ${watchThresholdLabel(w.maxHistoryCount)}`);
     }
   } catch (e) {
-    showToast('开启监听失败：' + e.message);
+    if (!auto) showToast('开启监听失败：' + e.message);
   } finally {
     watchUi.busy = false;
+    watchUi.pendingOn = null;
     syncWatchRow();
   }
 }
 
 async function watchStop({ silent = false } = {}) {
   watchUi.busy = true;
+  watchUi.pendingOn = false;
   syncWatchRow();
   try {
-    const w = await API('watch', { enabled: '0' }, null, 'POST');
-    watchUi.snapshot = w;
-    watchUi.enabled = false;
+    applyWatchSnapshot(await watchSave({ enabled: false }));
     watchUi.unread = 0;
     clearTimeout(watchUi.timer);
     watchUi.timer = null;
     hideWatchCard();
     renderWatchDock();
     syncWatchBridge(); // 让 Android 的后台轮询也停下来
-    if (!silent) showToast('已停止监听（历史记录保留，可随时查看）');
+    if (!silent) showToast('已关闭监听（历史记录保留，可随时查看）');
     if (!$('watchModal').hidden) renderWatchBody();
   } catch (e) {
-    if (!silent) showToast('停止监听失败：' + e.message);
+    if (!silent) showToast('关闭监听失败：' + e.message);
   } finally {
     watchUi.busy = false;
+    watchUi.pendingOn = null;
     syncWatchRow();
+  }
+}
+
+/**
+ * 页面条件（地区 / 日期 / 检索）变了 → 把新条件同步给监听（**不动开关**）。
+ *
+ * 这就是「一直监听」的实现方式：用户不用手动重开，条件跟着页面走。
+ * 全程静默：服务端发现条件没变就直接返回（不回源），变了才重建基线并保留历史记录，
+ * 两种情况都不弹提示 —— 否则用户每换一个区县都会被弹一下。
+ */
+async function watchSyncConditions() {
+  if (!watchUi.enabled || watchUi.syncing || watchUi.busy) return null;
+  watchUi.syncing = true;
+  try {
+    const w = applyWatchSnapshot(await watchSave({ defer: true }));
+    renderWatchDock();
+    syncWatchRow();
+    if (!$('watchModal').hidden) renderWatchBody();
+    return w;
+  } catch (e) {
+    // 同步失败不打扰用户：监听按上一个条件继续跑
+    return null;
+  } finally {
+    watchUi.syncing = false;
   }
 }
 
@@ -2487,9 +2573,7 @@ async function watchCheck({ force = false, silent = true } = {}) {
   if (watchUi.busy || watchUi.polling) return null;
   watchUi.polling = true;
   try {
-    const w = await API('watch/check', force ? { force: '1' } : null);
-    watchUi.snapshot = w;
-    watchUi.enabled = !!w.enabled;
+    const w = applyWatchSnapshot(await API('watch/check', force ? { force: '1' } : null));
     if (!w.enabled) {
       // 监听在别处被关掉了（另一台设备 / 服务端被重置）：Android 的后台轮询也要停
       renderWatchDock();
@@ -2550,19 +2634,36 @@ function watchCatchUp() {
 
 /** 页面启动时恢复监听状态（不回源，只读状态） */
 async function restoreWatch() {
-  try {
-    const w = await API('watch');
-    watchUi.snapshot = w;
-    watchUi.enabled = !!w.enabled;
-    if (w.maxHistoryCount) watchUi.threshold = Number(w.maxHistoryCount);
-    syncWatchRow();
-    renderWatchDock();
-    if (w.enabled) scheduleWatchPoll(w.intervalMs);
-    syncWatchBridge(); // 应用每次起来都要把「监听开着没」告诉后台轮询线程
-  } catch (e) {
-    // 服务端不可用：保持「未监听」的外观，别把页面搞成报错脸
-    syncWatchRow();
+  // 服务端可能还没起来（exe / APK 里 Node 与页面同时启动）：重试几次再认输，
+  // 不然「默认自动监听」会因为一次抢跑而白丢。
+  let w = null;
+  for (let i = 0; i < 3 && !w; i++) {
+    try {
+      w = await API('watch');
+    } catch (e) {
+      await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
+    }
   }
+  if (!w) {
+    syncWatchRow(); // 服务端连不上：保持「没监听」的外观，别把页面搞成报错脸
+    return;
+  }
+  applyWatchSnapshot(w);
+  syncWatchRow();
+  renderWatchDock();
+
+  // 「默认都是自动监听」：从没配过（新装 / 状态被清掉）就按页面当前条件直接开上，
+  // 不用用户跑到「我的」里点一下。配过一次之后就完全尊重用户的开关。
+  if (!w.everConfigured) {
+    await watchStart({ auto: true });
+    return;
+  }
+  if (w.enabled) {
+    scheduleWatchPoll(w.intervalMs);
+    // 页面还原出来的条件可能和上次不一样（换了地区 / 改了日期）：静默跟着变
+    watchSyncConditions();
+  }
+  syncWatchBridge(); // 应用每次起来都要把「监听开着没」告诉后台轮询线程
 }
 
 /* ---------------- 历史记录弹层 ---------------- */
@@ -2576,11 +2677,9 @@ async function openWatchModal() {
   el.hidden = false;
   document.body.style.overflow = 'hidden';
   renderWatchBody();
-  // 打开时只读一次状态（不回源）：让「最近检查 / 下次回源 / 阈值」是新的
+  // 打开时只读一次状态（不回源）：让「最近检查 / 下次回源 / 稀有数量」是新的
   try {
-    const w = await API('watch');
-    watchUi.snapshot = w;
-    watchUi.enabled = !!w.enabled;
+    applyWatchSnapshot(await API('watch'));
     renderWatchDock();
     syncWatchRow();
     renderWatchBody();
@@ -2622,7 +2721,7 @@ function renderWatchBody() {
   const th = Number(w.maxHistoryCount) || 0;
   const chips = [];
   if (w.label) chips.push(`<strong>${esc(w.label)}</strong>`);
-  chips.push(`稀有阈值 ${esc(watchThresholdLabel(th))}（近两年记录数）`);
+  chips.push(`稀有数量 ${esc(watchThresholdLabel(th))}（近两年记录数）`);
   if (w.lastCheckAt) chips.push(`最近检查 ${esc(fmtTime(w.lastCheckAt))}`);
   if (!w.enabled) chips.push('<span class="warn">监听已停止</span>');
   else {
@@ -2643,8 +2742,11 @@ function renderWatchBody() {
       : `每轮最短间隔 ${min} 分钟，避免被记录中心限流`;
   }
 
-  // 「本时段最稀有的也有 N 条」必须摊开 —— 阈值是绝对条数，大范围下命中不了是常态
+  // 「本时段最稀有的也有 N 条」必须摊开 —— 数量是绝对条数，大范围下命中不了是常态
   const notes = [];
+  if (w.baselinePending) {
+    notes.push('正在按当前条件建立基线（这一轮不提醒，免得把已经在的鸟全报一遍）');
+  }
   if (w.scanned) {
     notes.push(
       `本时段共 <strong>${fmt(w.scanned)}</strong> 种鸟，其中近两年记录数最少的一档是 ` +
@@ -2652,11 +2754,11 @@ function renderWatchBody() {
     );
     if (w.minHistoryCount !== null && w.minHistoryCount !== undefined && w.minHistoryCount > th) {
       notes.push(
-        `<span class="warn">阈值 ${esc(watchThresholdLabel(th))} 在当前范围里一种也命中不了 —— 想收到提醒，把阈值提到 ` +
+        `<span class="warn">数量 ${esc(watchThresholdLabel(th))} 在当前范围里一种也命中不了 —— 想收到提醒，把「我的」里的稀有数量提到 ` +
           `${fmt(w.minHistoryCount)} 条以上</span>`
       );
     } else if (w.rareCount) {
-      notes.push(`当前阈值下命中 <strong>${fmt(w.rareCount)}</strong> 种`);
+      notes.push(`当前数量下命中 <strong>${fmt(w.rareCount)}</strong> 种`);
     }
   }
   const sum = notes.length ? `<div class="wt-sum">${notes.join('；')}</div>` : '';
@@ -2666,7 +2768,7 @@ function renderWatchBody() {
       sum +
       `<div class="notice">${
         w.enabled
-          ? '还没有发现。监听进行中 —— 按上方的条件定期回上游取数，新出现的稀有鸟种会记在这里，并在右下角提示。'
+          ? '还没有发现。监听进行中 —— 按当前页面上的条件（地区 / 日期 / 检索）定期回上游取数，新出现的稀有鸟种会记在这里，并在右下角提示。'
           : '还没有发现。'
       }</div>`;
     return;
@@ -2727,8 +2829,7 @@ window.__birdWatchNotifyPending = (n) => {
   if (k <= 0) return;
   API('watch')
     .then((w) => {
-      watchUi.snapshot = w;
-      watchUi.enabled = !!w.enabled;
+      applyWatchSnapshot(w);
       watchUi.unread += k;
       // 历史是时间倒序，最前面的 k 条正是后台刚报过的那几条
       const fresh = (Array.isArray(w.history) ? w.history : []).slice(0, k);
@@ -3393,15 +3494,16 @@ function bind() {
     openCaptcha();
   });
 
-  // ---- 稀有监听：开关 / 阈值 / 右下角浮标 / 历史记录弹层 ----
-  $('btnWatchToggle').addEventListener('click', () => {
-    if (watchUi.snapshot && watchUi.snapshot.enabled) watchStop();
-    else watchStart();
+  // ---- 稀有监听：开关 / 稀有数量 / 右下角浮标 / 历史记录弹层 ----
+  // 「我的」里的开关：勾上 = 开启（或重新开启），取消 = 关闭
+  $('chkWatch').addEventListener('change', (e) => {
+    if (e.target.checked) watchStart();
+    else watchStop();
   });
-  // 监听中直接改阈值 = 按同一批条件重开一次（重建基线，但历史记录不清空）
+  // 改「稀有数量」：监听着就按新数量重开一次（重建基线，历史记录与报过的鸟都保留）
   $('selWatchThreshold').addEventListener('change', (e) => {
     watchUi.threshold = Number(e.target.value);
-    if (watchUi.snapshot && watchUi.snapshot.enabled) watchStart({ reconfig: true });
+    if (watchUi.enabled) watchStart({ reconfig: true });
     else syncWatchRow();
   });
   $('watchPill').addEventListener('click', openWatchModal);
@@ -3449,8 +3551,7 @@ function bind() {
   });
   $('btnWatchClear').addEventListener('click', async () => {
     try {
-      const w = await API('watch/history', null, null, 'POST');
-      watchUi.snapshot = w;
+      const w = applyWatchSnapshot(await API('watch/history', null, null, 'POST'));
       renderWatchBody();
       showToast('已清空监听记录（已提醒过的鸟种不会重复报）');
     } catch (e) {

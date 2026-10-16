@@ -89,32 +89,6 @@
       <button class="btn btn-mini" id="btnResetFilters" title="清空观测地点 / 用户名称 / 鸟种名称">清空检索</button>
       <button class="btn btn-primary" id="btnQuery">查询</button>
       <div class="filter-hint" id="filterHint" hidden></div>
-
-      <!-- 稀有监听：按当前条件盯住稀有鸟种，有新发现就在右下角提示（Android 端另有系统通知）。
-           「稀有」的口径是「该地区最近两年记录数 ≤ 阈值」——这是个**绝对**条数，
-           所以在北京市（实测最少 95 条）/ 全国（最少 286 条）这种大范围下，默认的 3 条
-           永远命中不了。阈值因此做成可调的，并在「历史记录」里把「本时段最稀有的也有 N 条」
-           摊开来说，免得让人以为监听坏了。 -->
-      <div class="watch-row" id="watchRow">
-        <span class="wr-label">
-          <svg class="wr-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
-            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-            <path d="M2.6 8.4a5.4 5.4 0 0 1 10.8 0" />
-            <path d="M8 8.4 10.6 5.6" />
-            <path d="M2.2 11.4a7 7 0 0 0 11.6 0" />
-          </svg>稀有监听
-        </span>
-        <select id="selWatchThreshold" class="mini-select"
-          title="稀有判定：该地区「最近两年记录数」不超过这个条数才算稀有">
-          <option value="3">≤ 3 条 · 极稀有</option>
-          <option value="10">≤ 10 条</option>
-          <option value="50">≤ 50 条</option>
-          <option value="100">≤ 100 条</option>
-          <option value="300">≤ 300 条</option>
-        </select>
-        <button class="btn btn-mini" id="btnWatchToggle" type="button">开始监听</button>
-        <span class="wr-hint" id="watchRowHint"></span>
-      </div>
     </section>
 
     <!-- 概览 -->
@@ -327,6 +301,42 @@
             <option value="bounce">弹跳</option>
             <option value="none">关闭动画</option>
           </select>
+        </div>
+
+        <!-- 稀有监听：**一直开着**，条件跟着上面选的地区 / 日期 / 检索自动变，所以这里
+             只放「是否监听」与「稀有数量」两项（状态存在服务端，换设备 / 刷新都还在）。
+             「稀有」= 该地区最近两年记录数 ≤ 这个数量 —— 是个**绝对**条数，
+             所以在北京市（实测最少 95 条）/ 全国（最少 286 条）这种大范围下，
+             默认的 3 条永远命中不了。数量因此可调，下面还会把「本时段最稀有的也有 N 条」
+             摊开来说，免得让人以为监听坏了。 -->
+        <div class="my-watch">
+          <div class="mw-head">
+            <span class="mw-label">
+              <svg class="mw-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <path d="M2.6 8.4a5.4 5.4 0 0 1 10.8 0" />
+                <path d="M8 8.4 10.6 5.6" />
+                <path d="M2.2 11.4a7 7 0 0 0 11.6 0" />
+              </svg>稀有监听
+            </span>
+            <label class="mw-switch" title="关掉后不再提醒（历史记录会保留）">
+              <input type="checkbox" id="chkWatch" />
+              <span class="mw-track" aria-hidden="true"><span class="mw-knob"></span></span>
+              <span class="mw-state" id="mwSwitchText">监听中</span>
+            </label>
+          </div>
+          <div class="mw-row">
+            <label for="selWatchThreshold">稀有数量</label>
+            <select id="selWatchThreshold" class="mini-select"
+              title="该地区「最近两年记录数」不超过这个条数才算稀有；范围越大越要往高里调">
+              <option value="3">≤ 3 条 · 极稀有</option>
+              <option value="10">≤ 10 条</option>
+              <option value="50">≤ 50 条</option>
+              <option value="100">≤ 100 条</option>
+              <option value="300">≤ 300 条</option>
+            </select>
+          </div>
+          <p class="mw-hint" id="watchRowHint"></p>
         </div>
       </div>
     </div>

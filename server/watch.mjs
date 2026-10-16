@@ -1,17 +1,22 @@
 /**
- * 「按当前条件盯着稀有鸟种」的监听器。
+ * 「一直盯着稀有鸟种」的监听器。
  *
- * 需求原话：按当前条件监听，一有稀有鸟种就提示（网页端右下角浮卡、Android 端系统通知），
- * 点提示能看历史记录。
+ * 需求原话：监听做到「我的」设置页面里，一直监听，会随着外部条件修改自动修改监听条件；
+ * 我的页面只要设置数量和是否监听就行，默认都是自动监听。
  *
  * 三条约定（都跟用户对过）：
  *
- *   1) 时间条件**沿用开启监听那一刻页面上的那一段**，不做滚动窗口。
+ *   1) **一直监听、条件自动跟随**：监听条件不是「定格在开启那一刻」，而是跟着页面上选的
+ *      地区 / 日期 / 检索条件走 —— 用户换了区县、改了日期，监听条件自动跟着变，
+ *      不需要手动重开（见 configure 的 enabled === undefined 那条语义）。
  *   2) 「稀有」= 该地区**最近两年记录数 ≤ 阈值**（默认 3）。直接沿用榜单的历史口径，
  *      不另算一套；候选集就是榜单成员（= 本时段出现过）。
- *   3) 因为时间条件是钉住的，结果集只在上游**补录**时才会变。所以开启监听时先把当时
- *      命中的一批记成**基线**（baseline），之后只报基线之外新出现的 —— 否则每轮检查
- *      都会把同一批鸟重复报一遍。
+ *   3) 条件（或阈值）一变就先重新划一条**起跑线**：把当时命中的一批记成**基线**
+ *      （baseline），之后只报基线之外新出现的 —— 否则每轮检查都会把同一批鸟重复报一遍。
+ *      重建基线时**保留** `alerted`（报过的鸟不重报）与 `history`（历史记录不清空）。
+ *
+ * 名词：界面上的「稀有数量」= 这里的 `maxHistoryCount`（早先叫「阈值」，代码里两者同义）。
+ * 交互上只有两项可设：「是否监听」（enabled）与「稀有数量」；条件由页面自动跟随，不进设置界面。
  *
  * ---------------------------------------------------------------------------
  * 两个实测出来的坑，直接决定了实现方式与界面上要怎么讲：
@@ -78,7 +83,18 @@ function clampInt(v, min, max, fallback) {
 function emptyState() {
   return {
     v: STATE_VERSION,
-    enabled: false,
+    /**
+     * 默认**开着**（「默认都是自动监听」）。此时通常还没有条件（conditions=null）：
+     * 服务端不知道页面在看哪个地区，什么也做不了；页面一打开就会把当前的
+     * 地区 / 日期 / 检索条件同步过来（见 configure 与 web/app.js 的 watchSyncConditions）。
+     */
+    enabled: true,
+    /**
+     * 有没有被真正配置过一次。
+     * false = 从没配过（新装 / 状态被清掉）→ 页面按「默认自动监听」自己配上条件开起来；
+     * true  = 用户配过，之后就**完全尊重用户的开关**，不会自己又打开。
+     */
+    everConfigured: false,
     conditions: null,
     label: '',
     maxHistoryCount: DEFAULT_MAX_HISTORY_COUNT,
@@ -86,6 +102,12 @@ function emptyState() {
     minFetchGapMs: DEFAULT_MIN_FETCH_GAP_MS,
     /** 开启监听时已命中的稀有鸟种（taxonId 数组）：这些不报，用来划出「新出现」的界线 */
     baseline: [],
+    /**
+     * 正在重建基线（改完条件 / 阈值后的那一轮还没跑完）。
+     * 这期间**绝不能**产生提醒：基线是空的，当前命中的一整批鸟会被当成「新发现」全报出去。
+     * 所以 check() 见到它就跳过本轮，等 runBaseline() 把它摘掉（见该函数注释）。
+     */
+    baselinePending: false,
     /** 已经报过的 taxonId → 首次报出时间，避免同一只鸟反复提醒 */
     alerted: {},
     /** 提醒记录，倒序。这是「历史记录」弹层的数据源 */
@@ -114,14 +136,27 @@ function emptyState() {
 export function createWatch({ dataDir, loadHot, log = () => {} }) {
   const file = path.join(dataDir, STATE_FILE);
   let state = restore();
+  /** 内存态：正在跑「建基线」那一轮（不落盘；进程重启后由 baselinePending 兜住） */
+  let buildingBaseline = false;
 
   function restore() {
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!raw || raw.v !== STATE_VERSION) return emptyState();
+      const conditions = raw.conditions && typeof raw.conditions === 'object' ? raw.conditions : null;
       return {
         ...emptyState(),
         ...raw,
+        // enabled 只认显式的 false：旧版本的状态文件里没有这两个字段，
+        // 「有 conditions」说明它被配过（旧版关掉时不清 conditions），按已配置处理，
+        // 免得把用户上次亲手关掉的监听又自动打开。
+        enabled: raw.enabled !== false,
+        everConfigured:
+          raw.everConfigured !== undefined
+            ? !!raw.everConfigured
+            : !!(conditions && Object.keys(conditions).length),
+        baselinePending: !!raw.baselinePending,
+        conditions,
         baseline: Array.isArray(raw.baseline) ? raw.baseline.map(String) : [],
         alerted: raw.alerted && typeof raw.alerted === 'object' ? raw.alerted : {},
         history: Array.isArray(raw.history) ? raw.history : [],
@@ -147,12 +182,14 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
   function snapshot() {
     return {
       enabled: state.enabled,
+      everConfigured: state.everConfigured,
       conditions: state.conditions,
       label: state.label,
       maxHistoryCount: state.maxHistoryCount,
       intervalMs: state.intervalMs,
       minFetchGapMs: state.minFetchGapMs,
       baselineCount: state.baseline.length,
+      baselinePending: state.baselinePending,
       alertedCount: Object.keys(state.alerted).length,
       history: state.history,
       historyShown: state.history.length,
@@ -167,35 +204,95 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
   }
 
   /**
-   * 开启 / 关闭监听，或改条件与阈值。
+   * 配置监听。一个入口覆盖三种语义：
    *
-   * 开启（以及改条件、改阈值）一律**重建基线**：条件变了，「已经见过的」就不再是同一批，
-   * 沿用旧基线会漏报。重建时会立刻回源跑一次，把当下命中的记成基线（这一次不产生提醒）。
-   * 历史记录是日志，不因为重开而清空。
+   *   enabled === true       开启（含「开着的时候按新条件 / 新阈值重来一遍」）
+   *   enabled === false      关闭（条件留着，历史与已提醒表都不动）
+   *   enabled === undefined  **只同步条件，不动开关** ← 页面自动跟随条件走的就是这条
+   *
+   * 「自动跟随」是这个功能的主用法：页面上换个区县、改个日期，监听条件自动跟着变，
+   * 用户不需要手动重开。为了不吓人一跳，条件或阈值一变就**重建基线**（新条件下当场
+   * 命中的那一批记成基线、不提醒），但 `alerted` 与 `history` **保留** ——
+   * 所以「改条件」既不会把报过的鸟再报一遍，也不会把历史记录清掉。
+   *
+   * 条件与阈值都没变时**直接返回、不回源**：页面每次查询完都会来同步一次，
+   * 每回都真去问上游会白白撞 505 风控。
+   *
+   * @param {object}  o
+   * @param {boolean} [o.enabled]  undefined = 不动开关
+   * @param {boolean} [o.defer]    条件变了但**不等**基线建完就返回（自动跟随走这条：
+   *                               建基线要真回一次上游、几十秒，不能让页面干等）
    */
-  async function configure({ enabled, conditions, label, maxHistoryCount, intervalMs, minFetchGapMs }) {
-    if (!enabled) {
+  async function configure({
+    enabled,
+    conditions,
+    label,
+    maxHistoryCount,
+    intervalMs,
+    minFetchGapMs,
+    defer = false,
+  }) {
+    if (enabled === false) {
+      // 关掉也算「配置过」：用户明确关掉的开关必须记住，否则下次开页面
+      // 会因为 everConfigured=false 又被当成「从没配过」自动打开。
       state.enabled = false;
+      state.everConfigured = true;
       save();
       return snapshot();
     }
+
+    // 关着的时候页面来同步条件：什么都不做（「开」的时候页面会把条件一起送过来，
+    // 不该因为用户翻了个地区就悄悄把监听打开）
+    if (enabled === undefined && !state.enabled) return snapshot();
+
     if (!conditions || !Object.keys(conditions).length) {
       const e = new Error('缺少监听条件');
       e.code = 400;
       throw e;
     }
 
+    const nextThreshold = clampInt(
+      maxHistoryCount, MIN_MAX_HISTORY_COUNT, MAX_MAX_HISTORY_COUNT, DEFAULT_MAX_HISTORY_COUNT
+    );
+    const nextInterval = clampInt(intervalMs, 60_000, 24 * 3600_000, DEFAULT_INTERVAL_MS);
+    const nextGap = clampInt(minFetchGapMs, 60_000, 24 * 3600_000, DEFAULT_MIN_FETCH_GAP_MS);
+    const nextLabel = label || '';
+
+    const wasOff = !state.enabled;
+    const sameCond =
+      !!state.conditions && JSON.stringify(state.conditions) === JSON.stringify(conditions);
+    // 从「关」到「开」也算变了：重新开启按新条件重新划起跑线，不是把关着那段时间的
+    // 新鸟一次性全倒给用户。
+    const changed = wasOff || !sameCond || state.maxHistoryCount !== nextThreshold;
+
+    if (!changed) {
+      // 只有标签 / 节拍可能变（条件一样、阈值一样），静默更新即可，不回源
+      state = {
+        ...state,
+        enabled: true,
+        everConfigured: true,
+        label: nextLabel,
+        intervalMs: nextInterval,
+        minFetchGapMs: nextGap,
+      };
+      save();
+      return snapshot();
+    }
+
     state = {
       ...state,
       enabled: true,
+      everConfigured: true,
       conditions,
-      label: label || '',
-      maxHistoryCount: clampInt(maxHistoryCount, MIN_MAX_HISTORY_COUNT, MAX_MAX_HISTORY_COUNT, DEFAULT_MAX_HISTORY_COUNT),
-      intervalMs: clampInt(intervalMs, 60_000, 24 * 3600_000, DEFAULT_INTERVAL_MS),
-      minFetchGapMs: clampInt(minFetchGapMs, 60_000, 24 * 3600_000, DEFAULT_MIN_FETCH_GAP_MS),
+      label: nextLabel,
+      maxHistoryCount: nextThreshold,
+      intervalMs: nextInterval,
+      minFetchGapMs: nextGap,
+      // 条件（或阈值）变了：「已经见过的」不再是同一批，必须重新划一条起跑线。
+      // ⚠ alerted 与 history **不动** —— 报过的鸟不重报、历史记录不清空。
       baseline: [],
-      alerted: {},
-      createdAt: Date.now(),
+      baselinePending: true,
+      createdAt: state.createdAt || Date.now(),
       lastCheckAt: 0,
       lastCheckOk: true,
       lastError: '',
@@ -204,8 +301,34 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
       minHistoryCount: null,
     };
     save();
-    await check({ baselineMode: true });
+
+    const building = runBaseline();
+    if (defer) return snapshot(); // 页面自动跟随条件时不等它（几十秒，页面不该卡住）
+    await building;
     return snapshot();
+  }
+
+  /**
+   * 跑那一轮「只建基线」的检查，跑完才摘掉 baselinePending。
+   *
+   * 这个标记是关键：从 configure 落盘（baseline 已清空）到这一轮真正查到数据之间，
+   * 会有一小段空档。这期间若来一次普通 check，基线是空的、`alerted` 里也没有，
+   * 当前命中的**一整批**鸟都会被当成「新发现」报出去 —— 正是最坏的一种误报。
+   */
+  async function runBaseline() {
+    buildingBaseline = true;
+    try {
+      await check({ baselineMode: true });
+    } catch (e) {
+      log(`[watch] 建基线失败：${e.message}`);
+    } finally {
+      buildingBaseline = false;
+      // 基线**没建成功**（上游取不到 / 历史口径缺失）就继续挂着 pending：
+      // 这时基线还是空的，放行普通检查会把当前命中的一整批鸟误报成「新发现」。
+      // 下一轮轮询会走 check() 里那条「就地补建基线」的路，不会一直空转。
+      state.baselinePending = !state.lastCheckOk;
+      save();
+    }
   }
 
   /**
@@ -217,7 +340,28 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
    */
   async function check({ baselineMode = false, force = false } = {}) {
     if (!state.enabled || !state.conditions) {
-      return { ...snapshot(), newAlerts: [], skipped: true, reason: '未开启监听' };
+      return {
+        ...snapshot(),
+        newAlerts: [],
+        skipped: true,
+        reason: state.conditions ? '未开启监听' : '还没同步到监听条件',
+      };
+    }
+
+    // 该建基线了（首次配置 / 条件变了 / 上一轮没建成）：**就地**跑「建基线」那一轮。
+    // 正常轮询撞上这个状态也这么处理 —— 只跳过的话，上游一抽风就永远建不出基线，
+    // 监听也就永远不提醒。真正在建的时候（buildingBaseline）才跳过，免得并发重复回源。
+    if (state.baselinePending && !baselineMode) {
+      if (buildingBaseline) {
+        return {
+          ...snapshot(),
+          newAlerts: [],
+          skipped: true,
+          reason: '正在按新的条件建立基线',
+          nextFetchInMs: 0,
+        };
+      }
+      baselineMode = true;
     }
 
     const now = Date.now();
@@ -234,19 +378,20 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
       };
     }
 
+    // 记在两个「已经问过上游」的时间点上（**含失败**）：失败也要算掉这一次，
+    // 否则上游一抽风，每一轮轮询都会立刻再打一次，正撞在 505 风控上。
+    state.lastCheckAt = now;
+    state.lastFetchAt = now;
+
     let hot;
     try {
       hot = await loadHot(state.conditions, { nocache: true });
     } catch (e) {
-      state.lastCheckAt = now;
       state.lastCheckOk = false;
       state.lastError = e.message || String(e);
       save();
       return { ...snapshot(), newAlerts: [] };
     }
-
-    state.lastCheckAt = now;
-    state.lastFetchAt = now;
 
     if (!hot || hot.unsupported) {
       state.lastCheckOk = false;
@@ -281,7 +426,8 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
 
     if (baselineMode) {
       state.baseline = rare.map((x) => String(x.taxonId));
-      state.alerted = {};
+      // ⚠ 这里**不清** alerted：条件变来变去（今天 ← → 本周、朝阳区 ← → 北京市）时，
+      //   「已经报过的那只鸟」不该因为换了条件又被报一遍。历史记录同理，是日志不是缓存。
       state.lastCheckOk = true;
       state.lastError = '';
       save();

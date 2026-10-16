@@ -2209,14 +2209,19 @@ const routes = {
     return watch.current();
   },
 
-  // 开启 / 关闭监听，或改条件与阈值（都用查询参数，键名与 buildWhere 一致）
+  // 配置监听（都用查询参数，键名与 buildWhere 一致）。三种用法：
+  //   ?enabled=1  开启（或「开着的时候按新条件 / 新阈值重来一遍」）
+  //   ?enabled=0  关闭
+  //   **不给 enabled** = 只同步条件、不动开关 —— 页面每次查询后自动跟随条件走的就是这条，
+  //                      所以它默认 defer（不等基线建完就返回，建基线要真回一次上游、几十秒）
   async 'POST /api/watch'(q) {
-    const enabled = q.get('enabled') === '1';
+    const hasEnabled = q.has('enabled');
+    const enabled = hasEnabled ? q.get('enabled') === '1' : undefined;
     const where = buildWhere(q);
     const conditions = pickConditions(where);
     // 「全国」不带起止日期时上游那个量级查不动，直接挡住，
-    // 别让用户开成一个永远不会响的监听
-    if (enabled && nationalNeedsRange(where)) {
+    // 别让用户开成一个永远不会响的监听（自动跟随那条路也一样挡：条件存下去也用不了）
+    if (enabled !== false && nationalNeedsRange(where)) {
       throw new HttpError(400, '监听「全国」需要同时选择起始日期与结束日期');
     }
     return watch.configure({
@@ -2225,6 +2230,7 @@ const routes = {
       label: (q.get('label') || '').trim() || watchLabel(where),
       maxHistoryCount: q.get('maxHistoryCount'),
       intervalMs: q.get('intervalMs'),
+      defer: q.get('defer') === '1',
     });
   },
 

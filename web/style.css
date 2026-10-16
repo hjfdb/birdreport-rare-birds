@@ -392,19 +392,40 @@ input[type="search"] { min-width: 200px; }
 .captcha-body { flex: none; height: 330px; border-top: 1px solid var(--border); background: #fff; }
 #captchaFrame { display: block; width: 100%; height: 100%; border: 0; }
 
-/* ---------------- 稀有监听：查询栏那一行 ---------------- */
-.watch-row {
-  width: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding-top: 10px; border-top: 1px dashed var(--border);
+/* ---------------- 稀有监听：「我的」面板里那一块 ----------------
+   一直开着、条件跟着页面上选的地区 / 日期 / 检索自动走，所以这里只放
+   「是否监听」与「稀有数量」两项，条件的现状只用一行小字说明。 */
+.my-watch { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.mw-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.mw-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.mw-ic { width: 14px; height: 14px; flex: none; color: var(--text-2); }
+/* 开关：原生 checkbox 藏起来（保留可聚焦与键盘操作），外观用 .mw-track / .mw-knob 画 */
+.mw-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.mw-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.mw-track {
+  position: relative; flex: none; width: 42px; height: 24px; border-radius: 12px;
+  background: var(--border-strong); transition: background .16s;
 }
-.wr-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 550; color: var(--text-2); }
-.wr-ic { width: 13px; height: 13px; flex: none; }
-/* 监听中：按钮变绿；悬停转红提示「点下去是停止」 */
-#btnWatchToggle.is-on { border-color: var(--green); color: var(--green); background: #eff8f2; }
-#btnWatchToggle.is-on:hover { border-color: var(--red); color: var(--red); background: #fdeeee; }
-.wr-hint { flex: 1 1 260px; min-width: 0; font-size: 12px; color: var(--muted); line-height: 1.65; }
-.wr-hint b { font-weight: 600; color: var(--text-2); }
-.wr-hint .warn { color: #9a6a10; font-weight: 550; }
+.mw-knob {
+  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(24, 38, 64, .25); transition: transform .16s;
+}
+.mw-switch input:checked + .mw-track { background: var(--green); }
+.mw-switch input:checked + .mw-track .mw-knob { transform: translateX(18px); }
+.mw-switch input:focus-visible + .mw-track { box-shadow: 0 0 0 3px rgba(47, 127, 214, .3); }
+.mw-switch input:disabled + .mw-track { opacity: .55; }
+.mw-state { font-size: 12.5px; font-weight: 550; color: var(--text-2); }
+.mw-switch input:checked ~ .mw-state { color: var(--green); }
+.mw-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.mw-row label { font-size: 12.5px; color: var(--text-2); flex: none; }
+.mw-row select { flex: 1; min-width: 0; }
+.mw-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.mw-hint b { font-weight: 600; color: var(--text-2); }
+.mw-hint .warn { color: #9a6a10; font-weight: 550; }
+.mw-hint .mw-cond, .mw-hint .mw-status { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .mw-track, .mw-knob { transition: none; }
+}
 
 /* ---------------- 稀有监听：右下角浮标 + 提示卡 ----------------
    z-index 55 —— 刻意压在弹层遮罩（60）之下：开着明细 / 我的等弹层时它自动被盖住。 */
