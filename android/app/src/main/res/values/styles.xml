@@ -18,4 +18,15 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowBackground">#FFFFFF</item>
     </style>
+
+    <!--
+      开屏主题：只给**启动窗口**用（Manifest 里挂在 MainActivity 上）。
+      windowBackground 换成「青绿底色 + 居中 App 图标」（见 drawable/launch_screen.xml），
+      冷启动从点桌面图标到页面画出来之间显示它，而不是一片白。
+      ⚠ MainActivity.onCreate 里必须先 setTheme(R.style.AppTheme) 再 super.onCreate
+      切回正常主题，否则窗口背景会一直是这张开屏图（页面白底才盖得住它）。
+    -->
+    <style name="AppTheme.Splash">
+        <item name="android:windowBackground">@drawable/launch_screen</item>
+    </style>
 </resources>

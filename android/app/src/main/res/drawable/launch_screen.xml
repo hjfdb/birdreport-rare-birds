@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  开屏（冷启动）画面：底色 + 居中的 App 图标。
+
+  用法见 styles.xml 的 AppTheme.Splash —— 它只是启动窗口的背景（windowBackground），
+  在 MainActivity.onCreate 里 setTheme 切回正常主题后就被页面内容盖掉了。
+
+  ▸ 图标用自适应图标的**前景层**（@mipmap/ic_launcher_foreground）：
+    各密度目录里都有现成 PNG，居中显示约 108dp，与桌面图标同一张图；
+  ▸ 底色沿用 ic_launcher_background（#24d6cf，与图标插画的青绿一致）——
+    图标圆角外露出的就是这层底色，看起来像图标浮在同色底上，不是贴了一张方块图；
+  ▸ Android 12+ 系统会用自带的 SplashScreen（同样是桌面图标），本文件主要覆盖 12 以下的机型。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/ic_launcher_background" />
+    <item
+        android:drawable="@mipmap/ic_launcher_foreground"
+        android:gravity="center" />
+</layer-list>

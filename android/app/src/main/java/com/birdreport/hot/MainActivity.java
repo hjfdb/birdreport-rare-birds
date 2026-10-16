@@ -58,6 +58,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // 启动主题（AppTheme.Splash）只负责冷启动那一瞬的开屏图（青绿底 + App 图标），
+        // 这里立刻切回正常主题：不切的话 windowBackground 一直是开屏图，
+        // 页面没画满 / 半透明的地方会透出图标来。
+        setTheme(R.style.AppTheme);
         super.onCreate(savedInstanceState);
         WatchNotifier.ensureChannel(this);
         notifier = new WatchNotifier(this, HOME);
