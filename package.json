@@ -10,7 +10,8 @@
     "start": "node server/index.mjs",
     "dev": "node --watch server/index.mjs",
     "build:exe": "node build-exe.mjs",
-    "build:apk": "node android/build-apk.mjs"
+    "build:apk": "node android/build-apk.mjs",
+    "release": "node release.mjs"
   },
   "engines": {
     "node": ">=18"

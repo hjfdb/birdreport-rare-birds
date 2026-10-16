@@ -24,7 +24,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 防呆：tag 是不是真的比线上已有版本更高。
+  # 版本号就是 tag，仓库里没有「自动 +1」的机制 —— 手滑发一个更低的版本没人会发现，
+  # 而 App 里的更新提示是按版本号比大小的，发低了用户那边会一直显示「有更新」却永远装不上。
+  # 校验逻辑与本地 `node release.mjs` 共用一份（release.mjs --check），
+  # 所以「CI 认为更高」与「App 认为更高」必然一致（都用 semver，预发布版更旧）。
+  #
+  # ⚠ 这个 job 刻意**不加 `if:` 到 job 上**：一旦 job 被 skip，依赖它的 build / android
+  #   也会被连带 skip（GitHub Actions 的坑），手动试跑就废了。改成「job 照跑、步骤按条件跳」。
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        if: github.ref_type == 'tag'
+        uses: actions/checkout@v7
+
+      - name: 安装 Node
+        if: github.ref_type == 'tag'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.13.0'
+
+      - name: 校验版本号确实是往上走的
+        if: github.ref_type == 'tag'
+        env:
+          # ls-remote 要读远端 tag 列表；checkout 已经把凭据配好了
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node release.mjs --check "${GITHUB_REF_NAME}"
+
   build:
+    needs: [guard]
     strategy:
       # 某个平台挂了不要连累其他平台：至少能看清是哪一个平台的问题
       fail-fast: false
@@ -164,6 +193,7 @@ jobs:
           retention-days: 7
 
   android:
+    needs: [guard]
     # 桌面三个平台的产物是「复制 Node 再注入 SEA blob」，Android 这条完全走的是另一套路：
     # 内嵌 nodejs-mobile 的 libnode.so（Node 18.20.4），Node 侧源码（server/ + web/）当 assets
     # 打进 APK，首次启动解包到私有目录再跑。所以它是独立 job，只是产物汇入同一个 Release。

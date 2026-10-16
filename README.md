@@ -346,22 +346,43 @@ URL 规则是 `/home/record/page.html?param=<Base64(JSON({reportId,ts}))>&sign=<
 │   └── app/src/main/            # cpp/native-lib.cpp（拉起 Node）+ java/…（WebView 与首次解包）
 ├── .github/workflows/   # release.yml：打 tag 自动构建并发布 Release（见下文「发布版本」）
 ├── build-exe.mjs        # 打包单文件 exe（Node SEA）；build-exe.cmd 是同一流程的命令行版
+├── release.mjs          # 发版助手：算下一个版本号 / 打 tag / 推送；也是 CI 里的 tag 校验器
 └── data/                # 本地缓存文件（api-cache.json / protection.json，可随时删除，会自动重建）
 ```
 
 ## 发布版本（打 tag 自动发布）
 
-推一个 tag 就会自动构建 4 个产物并发布到 Releases，不需要手动跑任何构建命令：
+推一个 tag 就会自动构建 4 个产物并发布到 Releases。**版本号不用改任何文件** —— 就是 tag。
+有个小助手帮你算下一个号，并在动手前把该验的都验一遍：
 
 ```bash
-# 先把要发布的代码提交并推上去（tag 指向的是那一个 commit）
+npm run release                  # 只看：线上最新 v0.0.17 → 建议 v0.0.18（什么都不动）
+npm run release -- minor         # 下一个次版本：v0.1.0
+npm run release -- --yes         # 就按「下一个补丁版」打 tag 并推送
+npm run release -- 0.1.0 --yes   # 指定版本号
+```
+
+`release.mjs` 会先验四件事，任一条不满足就**拒绝执行并说清原因**：
+
+1. 新版本号确实比线上最新 tag 高 —— 用的是和 App 内部**同一套 semver 规则**（预发布版算更旧）。
+   ⚠ 这里刻意没用 `sort -V`：GNU 的版本排序认为 `v0.1.0-beta` 比 `v0.1.0` 大，与 semver 相反，
+   用它会把一个其实更低的正式版放行。
+2. 本地与线上都没有同名 tag（同一个 tag 重推只会覆盖附件，不会发新版本）。
+3. 工作区干净（tag 不该指向一个不含未提交改动的 commit）。
+4. 本地 `HEAD` 已经推到线上 `main`（否则 CI 检出的是旧代码，发出来的包落后一截）。
+
+全过了才会 `git tag` + `git push origin <tag>`。不想用助手，手动打也一样：
+
+```bash
 git pull
 git tag v0.0.18                      # 轻量标签：本仓库现有的 tag 都是这种
 # 或 git tag -a v0.0.18 -m "v0.0.18" # 附注标签：带作者/日期/说明，更正式
 git push origin v0.0.18              # ← 必须单独推 tag，git push 不会顺带推它
 ```
 
-> 版本号**不用改任何文件** —— 就是这里的 tag，下面「版本号从哪来」有明细。
+> ⚠ **手打的 tag 也躲不过校验**：workflow 的第一个 job `guard` 会用同一套规则
+> （`node release.mjs --check <tag>`）再验一次，不比线上最新版高就**整个发布直接失败**，
+> 坏版本发不出去。
 
 约 3–5 分钟后自动完成。桌面三个平台**并行**构建（`windows-latest` / `macos-latest` arm64 /
 `macos-15-intel` x64），每个平台都会：构建 → **冒烟验证**（解压发布包、真起一次那个二进制打
