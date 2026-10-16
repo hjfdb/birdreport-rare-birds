@@ -7,12 +7,12 @@ plugins {
 //   storePassword=…
 //   keyAlias=birdreport
 //   keyPassword=…
-// 三级回退，保证任何环境下产出的都是**能直接安装**的包：
-//   ① 有 keystore.properties            → 用正式密钥（本地发布用）
-//   ② 有 BIRD_KEYSTORE_* 环境变量        → 用环境变量里的密钥（CI 从 Secrets 注入）
-//   ③ 都没有                            → 退回 debug 密钥
-// 第 ③ 条很关键：不这么做的话 CI 会打出 app-release-unsigned.apk，文件看着没问题，
-// 用户装上却会被系统直接拒绝（INSTALL_PARSE_FAILED_NO_CERTIFICATES），而日志里一点线索都没有。
+// 两个来源，**环境变量优先**（CI 从 Secrets 注入，同名项会覆盖文件里的）：
+//   ① BIRD_KEYSTORE_FILE / BIRD_KEYSTORE_PASSWORD / BIRD_KEY_ALIAS / BIRD_KEY_PASSWORD  ← CI 走这条
+//   ② android/keystore.properties                                                      ← 本机发布走这条
+// 两个都没有 → 退回 debug 密钥。这条回退很关键：不这么做的话 CI 会打出 app-release-unsigned.apk，
+// 文件看着没问题，用户装上却会被系统直接拒绝（INSTALL_PARSE_FAILED_NO_CERTIFICATES），
+// 而日志里一点线索都没有。
 def keystorePropsFile = rootProject.file('keystore.properties')
 def keystoreProps = new Properties()
 def hasKeystoreProps = keystorePropsFile.exists()
@@ -20,7 +20,9 @@ if (hasKeystoreProps) {
     keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
 
-// ② 环境变量来源。CI 里把 .jks 用 base64 存进 Secrets，构建前解码成文件再指过来。
+// 环境变量来源（**优先于上面的 keystore.properties**）。CI 里把 .jks 用 base64 存进 Secrets，
+// 构建前解码到 $RUNNER_TEMP 下的临时文件再指过来，不落盘到工作区。下面这几行会直接覆盖
+// keystoreProps 里的同名项 —— Gradle 取的就是这里的值。
 def envKeystoreFile = System.getenv('BIRD_KEYSTORE_FILE')
 def hasEnvKeystore = envKeystoreFile && file(envKeystoreFile).exists()
 if (hasEnvKeystore) {
