@@ -222,22 +222,22 @@
   <div id="myModal" class="modal-mask" hidden>
     <div class="modal modal-my" role="dialog" aria-modal="true" aria-labelledby="myTitle">
       <div class="modal-head">
-        <h3 id="myTitle">我的 · 加新比对</h3>
+        <h3 id="myTitle">我的</h3>
         <button class="modal-close" id="myClose" aria-label="关闭" title="关闭（Esc）">×</button>
       </div>
       <div class="modal-body my-body">
         <p class="my-intro">
-          输入你在 <a href="https://www.birdreport.cn/" target="_blank" rel="noreferrer">中国观鸟记录中心</a>
-          的<strong>用户名</strong>（只填用户名就行），本页会取回你<strong>有史以来的全部鸟种记录</strong>，
-          再与本地稀有鸟种排行逐种比对，把<strong>你还没加新</strong>的鸟标出来、并支持一键筛出。
+          填入你在 <a href="https://www.birdreport.cn/" target="_blank" rel="noreferrer">中国观鸟记录中心</a>
+          的<strong>用户名</strong>，会取回你<strong>全部鸟种记录</strong>，
+          与本地稀有鸟种排行比对，标出<strong>还没加新</strong>的鸟。
         </p>
 
-        <!-- 未绑定：只要求填用户名 -->
+        <!-- 未绑定：输入框与「绑定」同一行（省掉一行标签，面板更紧凑）。
+             提示写进 placeholder，不占地方。 -->
         <div class="my-form" id="myForm">
-          <label for="inpLifer">记录中心用户名</label>
           <div class="my-form-row">
-            <input type="text" id="inpLifer" placeholder="例如 kkia" autocomplete="off" spellcheck="false"
-              enterkeyhint="go" />
+            <input type="text" id="inpLifer" placeholder="记录中心用户名（例如 kkia）" autocomplete="off"
+              spellcheck="false" enterkeyhint="go" />
             <button class="btn btn-primary" id="btnLiferBind">绑定</button>
           </div>
           <p class="my-msg" id="myMsg" hidden></p>
@@ -262,28 +262,30 @@
           <p class="my-msg" id="myMsg2" hidden></p>
         </div>
 
-        <!-- 我的 TODO / 我的报告 / 收集拼图：都点按钮打开独立页。
+        <!-- 我的 TODO / 我的报告 / 收集拼图：三个入口做成等宽三宫格（以前是「两个一行 +
+             第三个占满一行」，右边参差不齐）。
              图标是内联 SVG（stroke: currentColor），跟着按钮文字一起变 hover 色；
-             「我的 TODO」的数字由 renderTodoEntry() 写进 #myTodoLabel —— 不能直接改
-             按钮的 textContent，那会把图标一起抹掉。 -->
-        <div class="my-todo-entry" id="myTodoEntry">
-          <button class="btn" id="btnMyTodo" type="button">
-            <svg class="btn-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+             「我的 TODO」的数字由 renderTodoEntry() 写进右上角的 #myTodoBadge 小角标 ——
+             不能直接改按钮的 textContent，那会把图标一起抹掉。 -->
+        <div class="my-entries" id="myTodoEntry">
+          <button class="entry-btn" id="btnMyTodo" type="button">
+            <svg class="entry-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <path d="M5.7 4.6h7.4M5.7 8h7.4M5.7 11.4h7.4" />
               <path d="M2.9 4.6h.01M2.9 8h.01M2.9 11.4h.01" />
-            </svg><span id="myTodoLabel">我的 TODO</span>
+            </svg><span id="myTodoLabel">TODO</span>
+            <span class="entry-badge" id="myTodoBadge" hidden>0</span>
           </button>
-          <button class="btn" id="btnMyReports" type="button" title="列出你在记录中心公开过的观鸟报告">
-            <svg class="btn-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+          <button class="entry-btn" id="btnMyReports" type="button" title="列出你在记录中心公开过的观鸟报告">
+            <svg class="entry-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <path d="M4.4 2.7h4.5l3.1 3.1v7.5H4.4Z" />
               <path d="M8.9 2.8v3.1h3.1" />
               <path d="M6.4 9.1h3.4M6.4 11.4h2.3" />
             </svg><span>我的报告</span>
           </button>
-          <button class="btn" id="btnMyPuzzle" type="button" title="按郑四名录的「科」铺开，看每个科收到了多少">
-            <svg class="btn-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+          <button class="entry-btn" id="btnMyPuzzle" type="button" title="按郑四名录的「科」铺开，看每个科收到了多少">
+            <svg class="entry-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <path d="M2.8 5.4h2.9a1.6 1.6 0 1 1 3.2 0h4.3v2.1a1.6 1.6 0 1 0 0 3.2v1.5H2.8Z" />
             </svg><span>收集拼图</span>
@@ -291,26 +293,28 @@
         </div>
 
         <!-- 弹出动画：类型选择，存本机、「我的」里可改 -->
-        <div class="my-anim-row">
-          <label for="selAnim">弹出动画</label>
-          <select id="selAnim" class="mini-select">
-            <option value="zoom">缩放弹出</option>
-            <option value="standard">标准（上浮）</option>
-            <option value="fade">淡入</option>
-            <option value="slide">侧滑</option>
-            <option value="bounce">弹跳</option>
-            <option value="none">关闭动画</option>
-          </select>
-        </div>
+        <!-- 设置：统一成「左边标签 / 右边控件」的行。
+             以前「弹出动画」「稀有监听」「稀有数量」各带一层盒子、中间还插虚线，看着很碎；
+             现在三段合成一块，只靠行间距区分。 -->
+        <section class="my-settings" id="mySettings">
+          <div class="my-row">
+            <label for="selAnim">弹出动画</label>
+            <select id="selAnim" class="mini-select">
+              <option value="zoom">缩放弹出</option>
+              <option value="standard">标准（上浮）</option>
+              <option value="fade">淡入</option>
+              <option value="slide">侧滑</option>
+              <option value="bounce">弹跳</option>
+              <option value="none">关闭动画</option>
+            </select>
+          </div>
 
-        <!-- 稀有监听：**一直开着**，条件跟着上面选的地区 / 日期 / 检索自动变，所以这里
-             只放「是否监听」与「稀有数量」两项（状态存在服务端，换设备 / 刷新都还在）。
-             「稀有」= 该地区最近两年记录数 ≤ 这个数量 —— 是个**绝对**条数，
-             所以在北京市（实测最少 95 条）/ 全国（最少 286 条）这种大范围下，
-             默认的 3 条永远命中不了。数量因此可调，下面还会把「本时段最稀有的也有 N 条」
-             摊开来说，免得让人以为监听坏了。 -->
-        <div class="my-watch">
-          <div class="mw-head">
+          <!-- 稀有监听：**一直开着**，条件跟着页面的地区 / 日期 / 检索自动变，所以这里只放
+               「是否监听」与「稀有数量」两项（状态存在服务端，换设备 / 刷新都还在）。
+               「稀有」= 该地区最近两年记录数 ≤ 这个数量 —— 是个**绝对**条数，
+               大范围（北京市最少 95 条 / 全国 286 条）下默认的 3 条永远命中不了，
+               所以数量可调，下面的说明里会把「本时段最稀有的也有 N 条」摊开来讲。 -->
+          <div class="my-row">
             <span class="mw-label">
               <svg class="mw-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -325,7 +329,7 @@
               <span class="mw-state" id="mwSwitchText">监听中</span>
             </label>
           </div>
-          <div class="mw-row">
+          <div class="my-row">
             <label for="selWatchThreshold">稀有数量</label>
             <select id="selWatchThreshold" class="mini-select"
               title="该地区「最近两年记录数」不超过这个条数才算稀有；范围越大越要往高里调">
@@ -337,25 +341,26 @@
             </select>
           </div>
           <p class="mw-hint" id="watchRowHint"></p>
-        </div>
+        </section>
 
-        <!-- 版本与更新：**只在这里出现** —— 主界面刻意不做任何更新提示。
-             有新版本时版本号旁边亮一个红点、右边写「发现 v0.0.17」，点它才弹「是否更新」。
-             版本号本身来自服务端（/api/version，由打包脚本写进 web/version.json），
+        <!-- 关于 / 版本：仍然**只在这里**出现 —— 主界面刻意不做任何更新提示。
+             有新版本时版本号旁边亮红点、状态写「发现 vX」，点整行才弹「是否更新」。
+             版本号来自服务端（/api/version，由打包脚本写进 web/version.json），
              所以 exe / APK / 源码三种形态都能报出自己是什么版本。 -->
-        <div class="my-about">
-          <div class="ma-about-row">
-            <span class="ma-label">关于</span>
-            <span class="ma-author">啾讯 · 作者 kkia</span>
+        <section class="my-about">
+          <div class="my-row">
+            <span class="row-lab">关于</span>
+            <span class="row-val ma-author">啾讯 · 作者 kkia</span>
           </div>
-          <button class="ma-ver" id="btnVersion" type="button" title="点这里检查更新">
-            <span class="ma-label">版本</span>
-            <span class="ma-num" id="verText">—</span>
+          <button class="my-row my-row-btn" id="btnVersion" type="button" title="点这里检查更新">
+            <span class="row-lab">版本</span>
+            <span class="row-val ma-num" id="verText">—</span>
             <span class="ma-dot" id="verDot" hidden aria-hidden="true"></span>
             <span class="ma-state" id="verState"></span>
+            <span class="row-chev" aria-hidden="true">›</span>
           </button>
-          <p class="ma-note" id="verNote"></p>
-        </div>
+          <p class="mw-hint" id="verNote"></p>
+        </section>
       </div>
     </div>
   </div>

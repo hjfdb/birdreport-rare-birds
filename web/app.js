@@ -1080,10 +1080,17 @@ function syncTodo() {
  *
  * ⚠ 只写 #myTodoLabel，**不能**写按钮的 textContent —— 那会把按钮里的图标一起抹掉。
  */
+/**
+ * 「我的」里 TODO 入口上的计数角标。
+ * 数量走右上角的小角标（#myTodoBadge），**不**再拼进按钮文字 ——
+ * 一是按钮要改成等宽三宫格，带上「（N）」就放不下；二是往按钮 textContent 里写会连图标一起抹掉。
+ */
 function renderTodoEntry() {
-  const label = $('myTodoLabel');
-  if (!label) return;
-  label.textContent = `我的 TODO（${todoList.length}）`;
+  const badge = $('myTodoBadge');
+  if (!badge) return;
+  const n = todoList.length;
+  badge.textContent = String(n);
+  badge.hidden = n === 0;
 }
 
 /**
@@ -2326,26 +2333,36 @@ function syncWatchRow() {
 
   if (!chk.checked) {
     hint.innerHTML =
-      '关掉后不再提醒，<b>历史记录会保留</b>；重新打开会按当前条件重新划一条起跑线（之前的记录还在）。';
+      '<span class="mw-status">关掉后不再提醒，<b>历史记录会保留</b>；重新打开会按当前条件重新划一条起跑线。</span>';
     return;
   }
 
-  // 状态那一行：先说「盯着什么」，再说「上一轮什么结果」
-  const parts = [];
-  if (w.baselinePending) parts.push('正在按当前条件建立基线…');
-  else if (w.lastError) parts.push(`<span class="warn">${esc(w.lastError)}</span>`);
-  else if (w.scanned) {
-    parts.push(
-      `本时段 ${fmt(w.scanned)} 种，最稀有的一档 ${w.minHistoryCount === null ? '—' : fmt(w.minHistoryCount)} 条`
+  // 逐条成行，别再挤成一整段：① 盯着什么 ② 上一轮什么结果 ③ 该不该调数量 / 通知权限
+  const lines = [];
+  lines.push(
+    `<span class="mw-cond">监听条件 <b>${esc((w && w.label) || '当前条件')}</b>　随页面条件自动跟着变</span>`
+  );
+
+  if (w.baselinePending) {
+    lines.push('<span class="mw-status">正在按当前条件建立基线…</span>');
+  } else if (w.lastError) {
+    lines.push(`<span class="mw-status"><span class="warn">${esc(w.lastError)}</span></span>`);
+  } else if (w.scanned) {
+    const min = w.minHistoryCount === null || w.minHistoryCount === undefined ? '—' : fmt(w.minHistoryCount);
+    const hit = w.rareCount ? ` · 命中 ${fmt(w.rareCount)} 种` : '';
+    lines.push(`<span class="mw-status">本时段 ${fmt(w.scanned)} 种 · 最稀有 ${min} 条${hit}</span>`);
+  } else {
+    lines.push('<span class="mw-status">还没检查过，稍等一会</span>');
+  }
+
+  // 数量是绝对条数，大范围下命中不了是常态 —— 直接告诉用户该调到多少
+  const th = Number((w && w.maxHistoryCount) || 0);
+  if (w && w.scanned && w.minHistoryCount !== null && w.minHistoryCount !== undefined && w.minHistoryCount > th) {
+    lines.push(
+      `<span class="mw-status"><span class="warn">数量 ${watchThresholdLabel(th)} 一种也命中不了，` +
+        `请调到 ${fmt(w.minHistoryCount)} 条以上</span></span>`
     );
-    // 阈值是绝对条数，大范围下命中不了是常态 —— 直接告诉用户该调到多少
-    const th = Number(w.maxHistoryCount) || 0;
-    if (w.minHistoryCount !== null && w.minHistoryCount !== undefined && w.minHistoryCount > th) {
-      parts.push(`<span class="warn">数量 ${watchThresholdLabel(th)} 一种也命中不了，想收到提醒请调到 ${fmt(w.minHistoryCount)} 条以上</span>`);
-    } else if (w.rareCount) {
-      parts.push(`当前命中 ${fmt(w.rareCount)} 种`);
-    }
-  } else parts.push('还没检查过，稍等一会');
+  }
 
   // Android 壳里才谈「通知权限」：网页端开着页面就有右下角提示，没有系统通知这回事
   if (ANDROID) {
@@ -2353,17 +2370,14 @@ function syncWatchRow() {
     try {
       perm = ANDROID.notifyState ? ANDROID.notifyState() : 'granted';
     } catch (e) { /* 桥出错按已授权处理，不吓用户 */ }
-    if (perm !== 'granted') {
-      parts.push('<span class="warn">系统通知权限未开 —— 应用退到后台时发现新鸟种不会提醒，请到系统设置里允许通知</span>');
-    } else {
-      parts.push('应用退到后台也会发系统通知');
-    }
+    lines.push(
+      perm !== 'granted'
+        ? '<span class="mw-status"><span class="warn">系统通知权限未开 —— 退到后台时发现新鸟种不会提醒</span></span>'
+        : '<span class="mw-status">应用退到后台也会发系统通知</span>'
+    );
   }
 
-  hint.innerHTML =
-    `<span class="mw-cond">监听条件：<b>${esc((w && w.label) || '当前条件')}</b>` +
-    `　（地区 / 日期 / 检索一变，这里自动跟着变）</span>` +
-    `<span class="mw-status">${parts.join(' · ')}</span>`;
+  hint.innerHTML = lines.join('');
 }
 
 /* ---------------- 右下角浮标与提示卡 ---------------- */
@@ -2898,11 +2912,12 @@ function renderVersionRow() {
   num.textContent = /^[0-9]/.test(ver) ? 'v' + ver : ver || '—';
   if (w.hasUpdate) {
     dot.hidden = false;
-    state.textContent = `发现 v${w.latest} · 点这里更新`;
+    // 状态文字要短：这一行右边还挤着「›」，写长了会在窄屏被压成省略号
+    state.textContent = `发现 v${w.latest}`;
     state.className = 'ma-state is-new';
   } else if (w.error) {
     dot.hidden = true;
-    state.textContent = '检查失败，点这里重试';
+    state.textContent = '检查失败';
     state.className = 'ma-state is-warn';
   } else if (w.latest) {
     dot.hidden = true;
@@ -2910,7 +2925,7 @@ function renderVersionRow() {
     state.className = 'ma-state';
   } else {
     dot.hidden = true;
-    state.textContent = '点这里检查更新';
+    state.textContent = '检查更新';
     state.className = 'ma-state';
   }
 
@@ -2919,8 +2934,10 @@ function renderVersionRow() {
   if (w.ttlMs) bits.push(`每 ${Math.round(w.ttlMs / 3600000)} 小时自动查一次`);
   if (w.versionSource === 'fallback') bits.push('源码运行，版本号未知');
   else if (!/^[0-9]/.test(ver)) bits.push('这是没打过 tag 的试跑版本，不参与更新比较');
+  // 状态文字压缩成「发现 vX」之后，把「点哪儿」补在这行说明里（红点 + › 只是视觉提示）
+  if (w.hasUpdate) bits.push('点这一行下载并更新');
   if (w.error) bits.push(w.error);
-  else if (w.isAndroid && w.asset && w.hasUpdate) bits.push('将下载 APK 并调起系统安装');
+  else if (w.isAndroid && w.asset && w.hasUpdate) bits.push('会下载 APK 并调起系统安装');
   note.textContent = bits.join(' · ');
 }
 

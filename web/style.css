@@ -258,24 +258,31 @@ input[type="search"] { min-width: 200px; }
 .hot-card .hc-head { padding-right: 22px; } /* 给角标让位 */
 
 /* ---------------- 「待去找 · TODO」：面板里的入口按钮 + 列表页 ---------------- */
-/* 「我的」里的入口（我的 TODO / 我的报告 / 收集拼图）：按文字内容分宽度，放不下整颗折行。
-   ⚠ 这里**不能**用 flex:1 1 30% 切成三等份：「我的 TODO（N）」比另两颗长近一倍
-   （文字 101px vs 54px），三等份在手机上只有 87~110px 宽，
-   加上 .btn 的左右内边距后文字必然顶出边框 —— 320px 视口实测溢出 32px。
-   改成 flex-basis:auto 后，各颗按内容撑开；一行放不下时整颗折行，不做无意义的压缩。
-   （不设 min-width:0：那是「允许压到比文字还窄」的开关，正是溢出的直接原因。） */
-.my-todo-entry { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-.my-todo-entry .btn {
-  flex: 1 1 auto; white-space: nowrap;
-  /* 图标 + 文字一行居中 */
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+/* 「我的」里的三个入口：等宽三宫格（图标在上、短标签在下）。
+   ⚠ 以前是「两颗一行 + 第三颗占满一行」，右边参差不齐；也**不能**直接等分成三份 ——
+   那时计数写在按钮文字里（「我的 TODO（N）」比另两颗长近一倍，320px 下必然顶出边框）。
+   现在计数挪到右上角的 #myTodoBadge 小角标，按钮上只剩「TODO / 我的报告 / 收集拼图」
+   这几个短标签（最长 4 个字），320px 下每格内宽约 77px，等分才放得下。 */
+.my-entries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.entry-btn {
+  position: relative; /* 角标定位的基准 */
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 6px; min-height: 58px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2); color: var(--text);
+  font-family: inherit; font-size: 12.5px; line-height: 1.2; cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
 }
-/* 按钮里的小图标：stroke 用 currentColor，按钮 hover / disabled 时自动跟着变色 */
-.btn-ic { flex: none; width: 15px; height: 15px; }
-/* 「弹出动画」选择行 */
-.my-anim-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; margin-bottom: 14px;}
-.my-anim-row label { font-size: 12.5px; color: var(--text-2); flex: none; }
-.my-anim-row select { flex: 1; min-width: 0; }
+.entry-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); background: #f2f7fd; }
+.entry-btn:disabled { opacity: .5; cursor: not-allowed; }
+/* 图标 stroke 用 currentColor，hover / 置灰时自动跟着变色 */
+.entry-ic { flex: none; width: 17px; height: 17px; }
+.entry-badge {
+  position: absolute; top: 5px; right: 6px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--primary); color: #fff;
+  font-size: 10.5px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.entry-badge[hidden] { display: none; }
 .my-todo { display: flex; flex-direction: column; }
 .my-todo[hidden] { display: none; }
 .todo-item { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--border); }
@@ -392,15 +399,27 @@ input[type="search"] { min-width: 200px; }
 .captcha-body { flex: none; height: 330px; border-top: 1px solid var(--border); background: #fff; }
 #captchaFrame { display: block; width: 100%; height: 100%; border: 0; }
 
-/* ---------------- 稀有监听：「我的」面板里那一块 ----------------
-   一直开着、条件跟着页面上选的地区 / 日期 / 检索自动走，所以这里只放
-   「是否监听」与「稀有数量」两项，条件的现状只用一行小字说明。 */
-.my-watch { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
-.mw-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.mw-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+/* ---------------- 「我的」面板下半部分：设置区 + 关于区 ----------------
+   两块共用同一套「左标签 / 右控件」的行式布局（.my-settings + .my-row）。
+   以前弹出动画、稀有监听、稀有数量各带一层盒子、中间还插一条虚线，加上「关于」和版本
+   三种不同样式的块堆在一起，看着很碎 —— 现在只留两条分隔线：设置区前、关于区前。 */
+.my-settings, .my-about { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border); }
+/* ⚠ 用**两列网格**而不是 flex：flex 里标签一旦写死宽度、控件又是可收缩的，
+   320px 下浏览器会把右边的开关挤瘦（实测「稀有监听」行 scrollWidth 比容器宽 7px、
+   开关被压到 56px，「已停止」被竖着排成三行）。网格固定「标签列 74px + 控件列吃掉剩余」，
+   谁都挤不到谁。74px = 最宽的那个标签（「稀有监听」带 14px 图标 = 70px）+ 4px 余量。 */
+.my-row { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 10px; }
+.my-row + .my-row { margin-top: 10px; }
+.my-row > label, .my-row > .row-lab, .my-row > .mw-label {
+  font-size: 12.5px; color: var(--text-2); white-space: nowrap;
+}
+.my-row select { min-width: 0; }
+
+/* 稀有监听那一行的标签带个小图标 */
+.mw-label { display: inline-flex; align-items: center; gap: 6px; }
 .mw-ic { width: 14px; height: 14px; flex: none; color: var(--text-2); }
 /* 开关：原生 checkbox 藏起来（保留可聚焦与键盘操作），外观用 .mw-track / .mw-knob 画 */
-.mw-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.mw-switch { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; cursor: pointer; user-select: none; }
 .mw-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
 .mw-track {
   position: relative; flex: none; width: 42px; height: 24px; border-radius: 12px;
@@ -414,12 +433,12 @@ input[type="search"] { min-width: 200px; }
 .mw-switch input:checked + .mw-track .mw-knob { transform: translateX(18px); }
 .mw-switch input:focus-visible + .mw-track { box-shadow: 0 0 0 3px rgba(47, 127, 214, .3); }
 .mw-switch input:disabled + .mw-track { opacity: .55; }
-.mw-state { font-size: 12.5px; font-weight: 550; color: var(--text-2); }
+/* 状态文字（监听中 / 已停止）：不许换行，否则会被竖着排成一列 */
+.mw-state { flex: none; white-space: nowrap; font-size: 12.5px; font-weight: 550; color: var(--text-2); }
 .mw-switch input:checked ~ .mw-state { color: var(--green); }
-.mw-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.mw-row label { font-size: 12.5px; color: var(--text-2); flex: none; }
-.mw-row select { flex: 1; min-width: 0; }
-.mw-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+
+/* 说明文字（跟着所属设置项，逐条成行，不再挤成一整段） */
+.mw-hint { margin: 9px 0 0; font-size: 12px; line-height: 1.75; color: var(--muted); }
 .mw-hint b { font-weight: 600; color: var(--text-2); }
 .mw-hint .warn { color: #9a6a10; font-weight: 550; }
 .mw-hint .mw-cond, .mw-hint .mw-status { display: block; }
@@ -429,29 +448,30 @@ input[type="search"] { min-width: 200px; }
 
 /* ---------------- 版本与更新：「我的」里那一行 + 更新弹层 ----------------
    刻意**只在「我的」里出现**：主界面不做任何更新提示，只有这一行会亮红点。 */
-.my-about { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
-/* 「关于」那一行：纯文本（应用名 + 作者），下面是可点的版本号按钮 */
-.ma-about-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; padding-left: 2px; }
-.ma-author { font-size: 13px; font-weight: 600; color: var(--text); }
-.ma-ver {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 10px; border-radius: 9px; cursor: pointer; text-align: left;
-  border: 1px solid var(--border); background: var(--surface-2);
-  font-family: inherit; color: var(--text); transition: border-color .15s, background .15s;
+.row-val { font-size: 13.5px; font-weight: 650; letter-spacing: .2px; }
+.ma-author { font-weight: 600; }
+/* 版本那一行整行可点（右端一个「›」提示），不再是单独一个描边盒子。
+   这一行有 5 个元素（标签 / 版本号 / 红点 / 状态 / ›），所以用 flex 而不是两列网格；
+   标签宽度与上面的网格列保持一致（74px），两行的标签才对得齐。 */
+.my-row-btn {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; margin-top: 10px; padding: 5px 2px; border: 0; border-radius: 8px;
+  background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  transition: background .15s;
 }
-.ma-ver:hover { border-color: var(--primary); background: #f2f7fd; }
-.ma-label { font-size: 12.5px; color: var(--text-2); flex: none; }
-.ma-num { font-size: 13.5px; font-weight: 650; letter-spacing: .2px; flex: none; }
+.my-row-btn > .row-lab { flex: none; width: 74px; white-space: nowrap; }
+.my-row-btn:hover { background: var(--surface-2); }
+.my-row-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 /* 红点：有新版才显示（hidden 由 JS 控制） */
 .ma-dot {
   flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--red);
   box-shadow: 0 0 0 3px rgba(217, 43, 43, .16);
 }
-.ma-state { font-size: 12px; color: var(--muted); flex: 1; min-width: 0; }
+/* 状态靠右：空间不够时先压它（min-width:0 允许省略号），版本号本身不会被挤掉 */
+.ma-state { margin-left: auto; min-width: 0; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .ma-state.is-new { color: var(--red); font-weight: 600; }
 .ma-state.is-warn { color: #9a6a10; }
-.ma-note { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.ma-note b { font-weight: 600; color: var(--text-2); }
+.row-chev { flex: none; color: var(--muted); font-size: 15px; line-height: 1; }
 
 /* 更新弹层的内容块 */
 .up-vers { font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
@@ -573,8 +593,8 @@ input[type="search"] { min-width: 200px; }
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
 }
 .my-note { color: var(--muted); }
+/* 输入框与「绑定」同一行：省掉一行标签，面板更紧凑（提示写进 placeholder） */
 .my-form { margin-top: 14px; }
-.my-form label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .my-form-row { display: flex; gap: 8px; }
 .my-form-row input { flex: 1; min-width: 0; }
 .my-msg { margin: 10px 0 0; font-size: 12.5px; line-height: 1.7; color: #b3261e; }
@@ -1107,20 +1127,14 @@ html.anim-none .watch-card { animation: none; }
   .me-icon { font-size: 15px; }
   .me-sub { display: none; }
 
-  /* 「我的」面板：手机上输入框与按钮上下排（并排时输入框只剩几个字符宽），
-     数字格子固定两列，两个操作按钮各占整行、更好点 */
+  /* 「我的」面板：手机上占满宽度，数字格子固定两列。
+     输入框与「绑定」**保持并排**：标签挪进 placeholder 之后，320px 下输入框仍有约 200px
+     （≈ 18 个字），不需要再上下排 —— 上下排会白占一行高度。 */
   .modal-my { width: 100%; }
   .my-body { padding: 12px 14px 16px; }
   .my-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .my-form-row { flex-direction: column; }
-  .my-form-row .btn { width: 100%; }
-  /* 三个入口按钮收一点内边距。上了图标之后每颗多占约 21px（15px 图标 + 6px 间距），
-     手机上三颗已塞不进一行 —— 会按内容宽度自然折成两行：
-     「我的 TODO（N）」+「我的报告」一行，「收集拼图」独占一行。这是预期布局；
-     靠的是 flex-basis:auto（放不下的那颗整颗折行），而不是把文字挤出按钮边框。
-     不要改成固定两列栅格：「我的 TODO（N）」在 320px 下需要 146px，
-     硬切一半只有 134px，又会溢出。 */
-  .my-todo-entry .btn { padding: 0 12px; }
+  /* 三个入口在手机上收一点左右内边距（三宫格格子本来就只有 ~88px 宽） */
+  .entry-btn { padding: 9px 4px; }
 
   /* 验证码浮层：手机上交出一点高度，避免遮罩被顶满、底部按钮够不着 */
   .modal-captcha { width: 100%; }
