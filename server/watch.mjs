@@ -1,14 +1,15 @@
 /**
  * 「一直盯着稀有鸟种」的监听器。
  *
- * 需求原话：监听做到「我的」设置页面里，一直监听，会随着外部条件修改自动修改监听条件；
- * 我的页面只要设置数量和是否监听就行，默认都是自动监听。
+ * 需求原话（两轮）：监听做到「我的」设置页面里，一直监听，会随着外部条件修改自动修改监听条件；
+ * 我的页面只要设置数量和是否监听就行。**后来改成默认关闭** —— 要用户自己去「我的」里打开。
  *
  * 三条约定（都跟用户对过）：
  *
  *   1) **一直监听、条件自动跟随**：监听条件不是「定格在开启那一刻」，而是跟着页面上选的
  *      地区 / 日期 / 检索条件走 —— 用户换了区县、改了日期，监听条件自动跟着变，
  *      不需要手动重开（见 configure 的 enabled === undefined 那条语义）。
+ *      ⚠ 关着的时候页面来同步条件一律**不动开关**（不因为用户翻了个地区就把监听打开）。
  *   2) 「稀有」= 该地区**最近两年记录数 ≤ 阈值**（默认 3）。直接沿用榜单的历史口径，
  *      不另算一套；候选集就是榜单成员（= 本时段出现过）。
  *   3) 条件（或阈值）一变就先重新划一条**起跑线**：把当时命中的一批记成**基线**
@@ -84,17 +85,10 @@ function emptyState() {
   return {
     v: STATE_VERSION,
     /**
-     * 默认**开着**（「默认都是自动监听」）。此时通常还没有条件（conditions=null）：
-     * 服务端不知道页面在看哪个地区，什么也做不了；页面一打开就会把当前的
-     * 地区 / 日期 / 检索条件同步过来（见 configure 与 web/app.js 的 watchSyncConditions）。
+     * 默认**关着**：监听要用户自己去「我的」里打开（开了之后条件会跟着页面自动走）。
+     * 关着时 conditions 通常也是 null —— 服务端不知道页面在看哪个地区，什么也不做。
      */
-    enabled: true,
-    /**
-     * 有没有被真正配置过一次。
-     * false = 从没配过（新装 / 状态被清掉）→ 页面按「默认自动监听」自己配上条件开起来；
-     * true  = 用户配过，之后就**完全尊重用户的开关**，不会自己又打开。
-     */
-    everConfigured: false,
+    enabled: false,
     conditions: null,
     label: '',
     maxHistoryCount: DEFAULT_MAX_HISTORY_COUNT,
@@ -147,14 +141,8 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
       return {
         ...emptyState(),
         ...raw,
-        // enabled 只认显式的 false：旧版本的状态文件里没有这两个字段，
-        // 「有 conditions」说明它被配过（旧版关掉时不清 conditions），按已配置处理，
-        // 免得把用户上次亲手关掉的监听又自动打开。
-        enabled: raw.enabled !== false,
-        everConfigured:
-          raw.everConfigured !== undefined
-            ? !!raw.everConfigured
-            : !!(conditions && Object.keys(conditions).length),
+        // enabled 只认显式的 true：默认是关的，只有状态文件里明确写着开着才开
+        enabled: raw.enabled === true,
         baselinePending: !!raw.baselinePending,
         conditions,
         baseline: Array.isArray(raw.baseline) ? raw.baseline.map(String) : [],
@@ -182,7 +170,6 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
   function snapshot() {
     return {
       enabled: state.enabled,
-      everConfigured: state.everConfigured,
       conditions: state.conditions,
       label: state.label,
       maxHistoryCount: state.maxHistoryCount,
@@ -233,10 +220,8 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
     defer = false,
   }) {
     if (enabled === false) {
-      // 关掉也算「配置过」：用户明确关掉的开关必须记住，否则下次开页面
-      // 会因为 everConfigured=false 又被当成「从没配过」自动打开。
+      // 关：把开关落盘就行。条件留着（下次打开不必重设），基线 / 历史 / 已提醒表都不动。
       state.enabled = false;
-      state.everConfigured = true;
       save();
       return snapshot();
     }
@@ -251,11 +236,20 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
       throw e;
     }
 
-    const nextThreshold = clampInt(
-      maxHistoryCount, MIN_MAX_HISTORY_COUNT, MAX_MAX_HISTORY_COUNT, DEFAULT_MAX_HISTORY_COUNT
-    );
-    const nextInterval = clampInt(intervalMs, 60_000, 24 * 3600_000, DEFAULT_INTERVAL_MS);
-    const nextGap = clampInt(minFetchGapMs, 60_000, 24 * 3600_000, DEFAULT_MIN_FETCH_GAP_MS);
+    // ⚠ 没给这些参数 = **保持现状**，不是重置成默认值。
+    //   页面「自动跟随条件」那次调用只送 conditions / label（见 web/app.js 的 watchSave），
+    //   要是把缺省当默认，用户调好的「稀有数量」会被每次查询悄悄打回 3 —— 而且因为
+    //   数量变了还会触发一次基线重建，白回一次上游。（route 侧传的是 null，不是 undefined。）
+    const nextThreshold =
+      maxHistoryCount == null
+        ? state.maxHistoryCount
+        : clampInt(maxHistoryCount, MIN_MAX_HISTORY_COUNT, MAX_MAX_HISTORY_COUNT, DEFAULT_MAX_HISTORY_COUNT);
+    const nextInterval =
+      intervalMs == null ? state.intervalMs : clampInt(intervalMs, 60_000, 24 * 3600_000, DEFAULT_INTERVAL_MS);
+    const nextGap =
+      minFetchGapMs == null
+        ? state.minFetchGapMs
+        : clampInt(minFetchGapMs, 60_000, 24 * 3600_000, DEFAULT_MIN_FETCH_GAP_MS);
     const nextLabel = label || '';
 
     const wasOff = !state.enabled;
@@ -270,7 +264,6 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
       state = {
         ...state,
         enabled: true,
-        everConfigured: true,
         label: nextLabel,
         intervalMs: nextInterval,
         minFetchGapMs: nextGap,
@@ -282,7 +275,6 @@ export function createWatch({ dataDir, loadHot, log = () => {} }) {
     state = {
       ...state,
       enabled: true,
-      everConfigured: true,
       conditions,
       label: nextLabel,
       maxHistoryCount: nextThreshold,

@@ -2246,7 +2246,6 @@ const WATCH_POLL_MAX_MS = 60 * 60 * 1000;
 const watchUi = {
   snapshot: null,   // 最近一次服务端快照（enabled / label / history / lastError / …）
   enabled: false,
-  everConfigured: false, // 服务端有没有被配过；false = 从没配过，「默认自动监听」就靠它判定
   threshold: 3,     // 界面上的「稀有数量」（未开启时只存在本地；开启后以服务端为准）
   unread: 0,        // 新发现但还没打开历史记录看的条数（只做角标）
   cardAlerts: [],   // 提示卡上正在列的那几条（点条目要能取回完整信息）
@@ -2308,7 +2307,6 @@ function watchLabelText(where) {
 function applyWatchSnapshot(w) {
   watchUi.snapshot = w;
   watchUi.enabled = !!(w && w.enabled);
-  watchUi.everConfigured = !!(w && w.everConfigured);
   if (w && w.maxHistoryCount) watchUi.threshold = Number(w.maxHistoryCount);
   return w;
 }
@@ -2332,8 +2330,11 @@ function syncWatchRow() {
   if (!watchUi.busy) sel.value = ensureThresholdOption(on ? w.maxHistoryCount : watchUi.threshold);
 
   if (!chk.checked) {
-    hint.innerHTML =
-      '<span class="mw-status">关掉后不再提醒，<b>历史记录会保留</b>；重新打开会按当前条件重新划一条起跑线。</span>';
+    // 从没开过（服务端还没有条件）时讲「开启后会怎样」，比讲「关掉后会怎样」有用；
+    // 开过又关掉的，说清历史记录还在。
+    hint.innerHTML = w && w.conditions
+      ? '<span class="mw-status">已停止。关掉后不再提醒，<b>历史记录会保留</b>；重新打开会按当前条件重新划一条起跑线。</span>'
+      : '<span class="mw-status">开启后按页面当前的地区 / 日期盯稀有鸟种，发现新鸟种会在右下角提醒你。</span>';
     return;
   }
 
@@ -2372,7 +2373,7 @@ function syncWatchRow() {
     } catch (e) { /* 桥出错按已授权处理，不吓用户 */ }
     lines.push(
       perm !== 'granted'
-        ? '<span class="mw-status"><span class="warn">系统通知权限未开 —— 退到后台时发现新鸟种不会提醒</span></span>'
+        ? '<span class="mw-status"><span class="warn">系统通知权限未开 —— 退到后台时不会提醒，请到系统设置里允许通知</span></span>'
         : '<span class="mw-status">应用退到后台也会发系统通知</span>'
     );
   }
@@ -2491,14 +2492,13 @@ function watchSave({ enabled, defer = false } = {}) {
  *
  * @param {object}  [o]
  * @param {boolean} [o.reconfig] 改完「稀有数量」的重开（提示语不一样）
- * @param {boolean} [o.auto]     首次启动的「默认自动监听」（提示语要说清是默认行为、可以关掉）
  */
-async function watchStart({ reconfig = false, auto = false } = {}) {
+async function watchStart({ reconfig = false } = {}) {
   const where = currentWhere();
   // 「全国」不带时间限制时上游会拉上千万条 —— 服务端也会拦，这里先拦一道，少一次往返
   if (!where.province && !(where.startTime && where.endTime)) {
     renderRegionHint();
-    if (!auto) showToast('「全国」范围要同时填起始与结束日期才能监听');
+    showToast('「全国」范围要同时填起始与结束日期才能监听');
     syncWatchRow(); // 把刚勾上的开关弹回去
     return;
   }
@@ -2507,9 +2507,7 @@ async function watchStart({ reconfig = false, auto = false } = {}) {
   watchUi.pendingOn = true;
   syncWatchRow();
   try {
-    // 首次「默认自动监听」用 defer：建基线要真回一次上游（几十秒），不能让浮标
-    // 和提示干等 —— 服务端会后台把基线建好（这期间不会误报，见 watch.mjs 的 baselinePending）。
-    const w = applyWatchSnapshot(await watchSave({ enabled: true, defer: auto }));
+    const w = applyWatchSnapshot(await watchSave({ enabled: true }));
     watchUi.unread = 0;
     hideWatchCard();
     renderWatchDock();
@@ -2520,15 +2518,13 @@ async function watchStart({ reconfig = false, auto = false } = {}) {
       // 基线没建起来（上游取不到 / 历史口径缺失）：必须让用户当场知道，
       // 否则他会以为「开着呢，等着就行」，其实是空转。
       showToast(`监听已开，但第一轮就遇到问题：${w.lastError}`);
-    } else if (auto) {
-      showToast(`已默认开启稀有监听：${label} · 稀有 ${watchThresholdLabel(w.maxHistoryCount)}（可在「我的」里关掉）`);
     } else if (reconfig) {
       showToast(`已按新的稀有数量重启监听：${watchThresholdLabel(w.maxHistoryCount)}`);
     } else {
       showToast(`已开始监听：${label} · 稀有 ${watchThresholdLabel(w.maxHistoryCount)}`);
     }
   } catch (e) {
-    if (!auto) showToast('开启监听失败：' + e.message);
+    showToast('开启监听失败：' + e.message);
   } finally {
     watchUi.busy = false;
     watchUi.pendingOn = null;
@@ -2670,15 +2666,10 @@ async function restoreWatch() {
   syncWatchRow();
   renderWatchDock();
 
-  // 「默认都是自动监听」：从没配过（新装 / 状态被清掉）就按页面当前条件直接开上，
-  // 不用用户跑到「我的」里点一下。配过一次之后就完全尊重用户的开关。
-  if (!w.everConfigured) {
-    await watchStart({ auto: true });
-    return;
-  }
+  // 默认是**关**的：页面上什么都不做，用户自己去「我的」里打开开关。
+  // 开着的时候才恢复轮询，并把页面上还原出来的条件（可能与上次不同）静默同步过去。
   if (w.enabled) {
     scheduleWatchPoll(w.intervalMs);
-    // 页面还原出来的条件可能和上次不一样（换了地区 / 改了日期）：静默跟着变
     watchSyncConditions();
   }
   syncWatchBridge(); // 应用每次起来都要把「监听开着没」告诉后台轮询线程

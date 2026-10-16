@@ -455,7 +455,7 @@ input[type="search"] { min-width: 200px; }
    标签宽度与上面的网格列保持一致（74px），两行的标签才对得齐。 */
 .my-row-btn {
   display: flex; align-items: center; gap: 8px;
-  width: 100%; margin-top: 10px; padding: 5px 2px; border: 0; border-radius: 8px;
+  width: 100%; margin-top: 10px; padding: 5px 0px; border: 0; border-radius: 8px;
   background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer;
   transition: background .15s;
 }
