@@ -93,15 +93,15 @@ jobs:
           else
             VERSION="dev-${GITHUB_SHA:0:7}"
           fi
-          # 二进制保持中文名，跟本地 `npm run build:exe` 的产物一致，双击 / 终端里看得懂。
+          # 二进制保持中文名（就是应用名），跟本地 `npm run build:exe` 的产物一致，双击 / 终端里看得懂。
           # macOS 上是裸的可执行文件（无扩展名），Windows 上是 .exe。
-          echo "EXE_NAME=观鸟地区稀有榜-${VERSION}-${{ matrix.target }}${{ matrix.ext }}" >> "$GITHUB_ENV"
+          echo "EXE_NAME=啾讯-${VERSION}-${{ matrix.target }}${{ matrix.ext }}" >> "$GITHUB_ENV"
           # 但**发布用的文件名必须是纯 ASCII**：实测 gh 在推导 Release 附件名时会剥掉所有
           # 非 ASCII 字符（「观鸟-中文名测试.zip」会变成「-.zip」）。ASCII 名另外还有好处：
           # URL 不做百分号转义，curl / wget / 下载器都不出乱码。
-          # zip **内部**的中文名不受影响，解压出来仍是「观鸟地区稀有榜-…」。
+          # zip **内部**的中文名不受影响，解压出来仍是「啾讯-…」。
           echo "ASSET_NAME=birdreport-rare-birds-${VERSION}-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
-          echo "  ▸ 二进制 ：观鸟地区稀有榜-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
+          echo "  ▸ 二进制 ：啾讯-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
           echo "  ▸ 发布包 ：birdreport-rare-birds-${VERSION}-${{ matrix.target }}.zip"
 
       - name: 构建

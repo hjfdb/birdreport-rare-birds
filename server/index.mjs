@@ -2419,7 +2419,7 @@ async function boot() {
 boot()
   .then((port) => {
     const url = `http://${HOST}:${port}/`;
-    console.log(`\n  观鸟地区稀有榜已启动${IS_SEA ? '（独立 exe 版）' : ''}`);
+    console.log(`\n  啾讯已启动${IS_SEA ? '（独立 exe 版）' : ''}`);
     console.log(`  ▸ 网页端  ${url}`);
     console.log(`  ▸ 接口    ${url}api/health`);
     console.log(`  ▸ 版本    v${appVersion().version}（${appVersion().source === 'git' ? '跟着 git tag' : appVersion().source}） · ${platformLabel()}`);

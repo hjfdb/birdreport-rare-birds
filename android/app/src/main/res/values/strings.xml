@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 桌面图标下显示的名字。与 exe / 网页端保持同一个中文名。 -->
-    <string name="app_name">观鸟地区稀有榜</string>
+    <!-- 桌面图标下显示的名字。与 exe / 网页端保持同一个名字（2026-10-16 由「观鸟地区稀有榜」改名「啾讯」）。 -->
+    <string name="app_name">啾讯</string>
 
     <!-- 「稀有监听」后台提醒用到的两条文案（WatchNotifier 引用） -->
     <string name="watch_channel_name">稀有鸟种提醒</string>

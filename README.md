@@ -1,6 +1,6 @@
-# 观鸟地区稀有鸟种榜
+# 啾讯
 
-基于 **中国观鸟记录中心**（[birdreport.cn](https://www.birdreport.cn/)）公开数据的「按行政区汇总本地稀有鸟种」服务，包含一个 **Node.js 服务端** 和一个 **网页端**。
+**观鸟地区稀有鸟种榜**：基于 **中国观鸟记录中心**（[birdreport.cn](https://www.birdreport.cn/)）公开数据的「按行政区汇总本地稀有鸟种」服务，包含一个 **Node.js 服务端** 和一个 **网页端**。
 
 选定 省 / 市 / 区县 与起止日期后（默认 **当天**），页面会把该区域**记录数最少的鸟种排在最前面**——记录越少，说明这种鸟在本地越稀有；同时标注每种鸟的保护等级（《国家重点保护野生动物名录》国家一级 / 国家二级 / 三有名录）、IUCN 红色名录等级、是否中国特有。
 
@@ -30,7 +30,7 @@
 
 | 系统 | 下载 | 怎么用 |
 | --- | --- | --- |
-| Windows | `birdreport-rare-birds-vX.Y.Z-win-x64.zip` | 解压后双击 `观鸟地区稀有榜-vX.Y.Z-win-x64.exe` |
+| Windows | `birdreport-rare-birds-vX.Y.Z-win-x64.zip` | 解压后双击 `啾讯-vX.Y.Z-win-x64.exe` |
 | macOS · Apple 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-arm64.zip` | 解压，见下方命令 |
 | macOS · Intel 芯片 | `birdreport-rare-birds-vX.Y.Z-mac-x64.zip` | 解压，见下方命令 |
 | Android（64 位手机） | `birdreport-rare-birds-vX.Y.Z-android-arm64.apk` | 直接装，见下方说明 |
@@ -41,7 +41,7 @@ macOS 上的程序没有图形界面，在「终端」里运行（把路径换�
 
 ```bash
 cd ~/Downloads
-./观鸟地区稀有榜-vX.Y.Z-mac-arm64
+./啾讯-vX.Y.Z-mac-arm64
 ```
 
 启动后浏览器会自动打开 <http://127.0.0.1:8787/>；Windows 上关掉那个黑色控制台窗口、
@@ -413,7 +413,7 @@ birdreport-rare-birds-<tag>-android-arm64.apk
 | 用在哪 | 怎么来 |
 | --- | --- |
 | exe / APK 里「我的」面板显示的版本 | 桌面 `BIRD_VERSION`、安卓 `BIRD_VERSION_NAME` = tag 去掉 `v`；打包时写进 `web/version.json` 一起进包（见 `server/version.mjs`） |
-| 二进制与附件文件名 | 直接用 tag 原文：`观鸟地区稀有榜-v0.0.17-win-x64.exe`、`birdreport-rare-birds-v0.0.17-…zip/apk` |
+| 二进制与附件文件名 | 直接用 tag 原文：`啾讯-v0.0.17-win-x64.exe`、`birdreport-rare-birds-v0.0.17-…zip/apk`（附件名保持 ASCII：gh 会剥掉非 ASCII 字符，中文名只留给 zip 内部那个二进制） |
 | Android 的 `versionCode` | `github.run_number`，**自动单调递增**（Android 判断「能否覆盖安装」就靠它） |
 
 所以 `git tag v0.0.18 && git push origin v0.0.18` 就够了。下面这些地方**只有特殊情况才碰**：

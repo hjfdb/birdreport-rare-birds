@@ -430,6 +430,9 @@ input[type="search"] { min-width: 200px; }
 /* ---------------- 版本与更新：「我的」里那一行 + 更新弹层 ----------------
    刻意**只在「我的」里出现**：主界面不做任何更新提示，只有这一行会亮红点。 */
 .my-about { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+/* 「关于」那一行：纯文本（应用名 + 作者），下面是可点的版本号按钮 */
+.ma-about-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; padding-left: 2px; }
+.ma-author { font-size: 13px; font-weight: 600; color: var(--text); }
 .ma-ver {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px 10px; border-radius: 9px; cursor: pointer; text-align: left;
