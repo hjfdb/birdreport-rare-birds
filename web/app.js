@@ -1345,6 +1345,7 @@ async function openTaxonCard(taxonId, name, count) {
   detail.pane = 'taxon';
   detail.taxonId = String(id);
   taxonCardCtx = { count: Number(count) || 0 };
+  taxonImgReset(); // 换鸟种了：图片区回到「未打开、未取过」
   $('btnDetailBack').hidden = false;
   $('detailTools').hidden = true; // 筛选 / 排序是列表的工具，档案里不适用
   $('detailFoot').hidden = true; // 分页同理
@@ -1435,6 +1436,129 @@ function closeTaxonCard() {
   paneNav('pane-pop'); // 返回：从左侧推回，跟「进档案」方向相反
 }
 
+/* ------------------------------------------------------------------ *
+ * 鸟种档案里的「查看图片」
+ *
+ * 图片是**点了才查**的（上游一次只给一页，且要带 taxon_id），网格里放缩略图
+ * （scale_url），点开用现有的图片查看器看原图（image_url）。
+ * 翻页走 /api/taxon/images，总页数由上游自报的 total 算出来。
+ * ------------------------------------------------------------------ */
+
+/** 档案里图片区的状态：换一个鸟种 / 重开档案都要重置 */
+let taxonImg = { page: 1, limit: 12, total: 0, totalPages: 1, list: [], loading: false, opened: false, error: '' };
+
+const taxonImgReset = () => {
+  taxonImg = { page: 1, limit: 12, total: 0, totalPages: 1, list: [], loading: false, opened: false, error: '' };
+};
+
+/** 点「查看图片」：第一次是打开并取第一页，之后是收起 / 展开 */
+async function toggleTaxonImages() {
+  if (taxonImg.opened && taxonImg.list.length) {
+    taxonImg.opened = false;
+    renderTaxonImgBox();
+    return;
+  }
+  taxonImg.opened = true;
+  if (!taxonImg.list.length) await loadTaxonImages(1);
+  else renderTaxonImgBox();
+}
+
+async function loadTaxonImages(page, limit = taxonImg.limit) {
+  const id = Number(detail.taxonId);
+  if (!id) return;
+  taxonImg.loading = true;
+  taxonImg.page = page;
+  taxonImg.limit = limit;
+  renderTaxonImgBox();
+  try {
+    const r = await API('taxon/images', { id, page, limit });
+    // 期间可能已经换了鸟种 / 关掉了档案：迟到的响应直接丢弃
+    if (detail.pane !== 'taxon' || Number(detail.taxonId) !== id) return;
+    taxonImg.list = r.list || [];
+    taxonImg.total = Number(r.total) || 0;
+    taxonImg.totalPages = Math.max(1, Number(r.totalPages) || 1);
+    taxonImg.page = Number(r.page) || page;
+    taxonImg.error = r.error || '';
+    taxonImg.opened = true;
+  } catch (e) {
+    if (detail.pane !== 'taxon' || Number(detail.taxonId) !== id) return;
+    taxonImg.list = [];
+    taxonImg.error = e.message;
+  } finally {
+    taxonImg.loading = false;
+    if (detail.pane === 'taxon') renderTaxonImgBox();
+  }
+}
+
+/** 图片区：按钮头 + 网格 + 翻页条 */
+function renderTaxonImgBox() {
+  const box = $('txImgBox');
+  if (!box) return;
+  const btn = $('txImgBtn');
+  if (btn) {
+    btn.textContent = taxonImg.opened ? '收起图片' : '查看图片';
+    btn.setAttribute('aria-expanded', taxonImg.opened ? 'true' : 'false');
+  }
+  if (!taxonImg.opened) {
+    box.innerHTML = '';
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+
+  if (taxonImg.loading && !taxonImg.list.length) {
+    box.innerHTML = '<div class="tx-img-loading"><div class="spinner"></div><span>正在读取图片…</span></div>';
+    return;
+  }
+  if (taxonImg.error) {
+    box.innerHTML = `<div class="notice error">${esc(taxonImg.error)}</div>`;
+    return;
+  }
+  if (!taxonImg.list.length) {
+    box.innerHTML = '<div class="notice">这个鸟种还没有公开图片。</div>';
+    return;
+  }
+
+  const cells = taxonImg.list
+    .map(
+      (x, i) =>
+        `<button class="tx-thumb" type="button" data-idx="${i}" title="${esc([x.time, x.address, x.account].filter(Boolean).join(' · '))}">` +
+        `<img src="${esc(x.thumb || x.url)}" alt="${esc(x.taxonName || '')} 图片 ${i + 1}" loading="lazy" />` +
+        (x.time || x.account ? `<span class="tx-thumb-cap">${esc([x.time, x.account].filter(Boolean).join(' · '))}</span>` : '') +
+        '</button>'
+    )
+    .join('');
+
+  const pager =
+    taxonImg.totalPages > 1
+      ? '<div class="tx-img-pager">' +
+        `<button class="tx-page" type="button" data-page="${taxonImg.page - 1}"${taxonImg.page <= 1 ? ' disabled' : ''}>‹ 上一页</button>` +
+        `<span class="tx-page-info">第 ${taxonImg.page} / ${taxonImg.totalPages} 页 · 共 ${fmt(taxonImg.total)} 张</span>` +
+        `<button class="tx-page" type="button" data-page="${taxonImg.page + 1}"${taxonImg.page >= taxonImg.totalPages ? ' disabled' : ''}>下一页 ›</button>` +
+        '</div>'
+      : taxonImg.total
+        ? `<div class="tx-img-pager"><span class="tx-page-info">共 ${fmt(taxonImg.total)} 张</span></div>`
+        : '';
+
+  box.innerHTML = `<div class="tx-img-grid">${cells}</div>${pager}`;
+}
+
+/** 用**现成的图片地址**直接开查看器（鸟种图片：地址自带 OSS 签名，不用再经过服务端） */
+function openTaxonPhoto(idx) {
+  const list = taxonImg.list || [];
+  if (!list.length) return;
+  const pv = $('photoViewer');
+  pv.classList.remove('is-closing');
+  pv.hidden = false;
+  $('pvTitle').textContent = `${list[0].taxonName || '鸟种'} · 鸟种图片`;
+  // 从点中的那张开始排：点第 5 张却从第 1 张看起，用户还得自己滚过去
+  const ordered = idx > 0 ? list.slice(idx).concat(list.slice(0, idx)) : list;
+  $('pvBody').innerHTML = ordered
+    .map((x, i) => `<img class="pv-img" src="${esc(x.url)}" alt="${esc(x.taxonName || '')} 图片 ${i + 1}" loading="lazy" />`)
+    .join('');
+  $('pvBody').scrollTop = 0;
+}
+
 /** 档案正文：名称三件套 → 分类 → 习性 / 辨识 / 分布 → 名录出处 */
 function renderTaxonCard(r, fallbackName) {
   if (!r || r.error) {
@@ -1471,9 +1595,16 @@ function renderTaxonCard(r, fallbackName) {
     block('生境习性', r.habit) +
     block('辨识特征', r.feature) +
     block('分布范围', r.spread) +
+    // 图片区：默认收起（点开才请求），骨架先落在这里，内容由 renderTaxonImgBox 填
+    '<div class="tx-imgs">' +
+    '<button class="tx-img-btn" id="txImgBtn" type="button" aria-expanded="false">查看图片</button>' +
+    '<div class="tx-img-box" id="txImgBox" hidden></div>' +
+    '</div>' +
     `<div class="tx-foot">资料来自中国观鸟记录中心鸟种名录${r.version ? ` · ${esc(r.version)}` : ''}` +
     ` · 名录 id ${esc(String(r.id || detail.taxonId || ''))}</div>` +
     '</div>';
+  // 正文刚重画：图片区是空的且收起状态（换鸟种时不该留着上一个鸟种的图片）
+  renderTaxonImgBox();
 }
 
 /** 「我的」里点「总鸟种数」→ 打开人生鸟种全列表（数据已在 state.liferInfo 里，零请求） */
@@ -3923,6 +4054,24 @@ function bind() {
     const tile = e.target.closest('.pz-tile[data-taxon-id]');
     if (tile && detail.kind === 'puzzle') {
       openTaxonCard(tile.dataset.taxonId, tile.dataset.taxonName, tile.dataset.taxonCount);
+      return;
+    }
+    // 鸟种档案里的「查看图片 / 收起图片」
+    if (e.target.closest('#txImgBtn')) {
+      toggleTaxonImages();
+      return;
+    }
+    // 图片翻页
+    const pg = e.target.closest('.tx-page[data-page]');
+    if (pg) {
+      const p = Number(pg.dataset.page);
+      if (p >= 1 && p <= taxonImg.totalPages) loadTaxonImages(p);
+      return;
+    }
+    // 点缩略图 → 用现有图片查看器看大图（从这一张开始）
+    const th = e.target.closest('.tx-thumb[data-idx]');
+    if (th) {
+      openTaxonPhoto(Number(th.dataset.idx) || 0);
       return;
     }
     // 报告详情里点鸟种 → 同一个鸟种档案；返回时回**报告详情**（不是回报告明细列表）。

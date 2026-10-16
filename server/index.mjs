@@ -39,6 +39,7 @@ import {
   getMemberTimeline,
   getReportTaxonImages,
   getTaxonContent,
+  searchTaxonImages,
 } from './birdreport.mjs';
 import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
@@ -1043,6 +1044,47 @@ async function loadTaxonContent(taxonId, nocache = false) {
   return { ...value, meta };
 }
 
+/**
+ * 鸟种图片：翻页看，缓存 6 小时。
+ * 图片地址自带 OSS 签名且有效期很长，短时间内重复打开同一个鸟种没必要回源。
+ */
+const TAXON_IMG_TTL_MS = Number(process.env.TAXON_IMG_TTL_MS || 6 * 60 * 60 * 1000);
+/** 一页图片数：缩略图网格，手机上三列一屏能看到 9~12 张 */
+const TAXON_IMG_LIMIT = 12;
+
+/**
+ * 某个鸟种的公开图片（一页）。
+ * @returns {{list: Array, total: number}} total 是**总数**（上游 count），翻页要用
+ */
+async function loadTaxonImages(taxonId, page, limit, nocache = false) {
+  const { value, meta } = await cached(
+    `taxonimg|${taxonId}|${page}|${limit}`,
+    async () => {
+      const r = await searchTaxonImages({ taxonId, page, limit });
+      const arr = Array.isArray(r.data) ? r.data : [];
+      const list = arr
+        .map((d) => ({
+          imageId: d.image_id,
+          url: d.image_url || '', // 原图：点开看大图用它
+          thumb: d.scale_url || d.image_url || '', // 缩放图：网格里的小图用它
+          address: d.image_address || '',
+          place: [d.province_name, d.city_name, d.district_name].filter(Boolean).join(' · '),
+          // 只要日期：上游给的是「2026-10-03 22:00:00」，网格里放不下整串
+          time: String(d.image_time || '').slice(0, 10),
+          account: d.account || '',
+          recordId: d.record_id || '',
+          activityId: d.activity_id || '',
+          taxonName: d.taxon_name || '',
+        }))
+        .filter((x) => x.url); // 没有地址的条目前端也用不了，直接丢掉
+      return { list, total: Number(r.count) || list.length };
+    },
+    nocache,
+    { ttl: TAXON_IMG_TTL_MS }
+  );
+  return { ...value, meta };
+}
+
 /** 取某个用户的收集拼图（与人生名册同节奏缓存 24 小时，避免每次打开都重铺 1595 行） */
 async function loadPuzzle(user, nocache = false) {
   const { value, meta } = await cached(
@@ -1933,6 +1975,39 @@ const routes = {
       // 单种读不到不影响其它格子：如实告诉前端，前端在弹层里显示一句人话
       console.warn(`[api] 鸟种档案 ${id} 取不到：` + e.message);
       return { id, error: `这个鸟种的资料暂时读不到（${e.message}）。稍后再试。` };
+    }
+  },
+
+  /**
+   * 鸟种图片（鸟种档案里的「查看图片」，按页翻）。
+   *
+   * 参数：id（taxon_id）；page（默认 1）；limit（默认 12，上限 30）；nocache=1 强制回源。
+   * total 是上游自报的**总数**（不是本页条数），前端靠它算总页数。
+   */
+  async 'GET /api/taxon/images'(q) {
+    const id = Number(q.get('id'));
+    if (!Number.isFinite(id) || id <= 0) {
+      return { list: [], total: 0, totalPages: 1, hasMore: false, error: '缺少或非法的 id 参数（要传数字 taxon_id）' };
+    }
+    const limit = Math.min(Math.max(1, Math.floor(Number(q.get('limit')) || TAXON_IMG_LIMIT)), 30);
+    const page = Math.max(1, Math.floor(Number(q.get('page')) || 1));
+    try {
+      const r = await loadTaxonImages(id, page, limit, q.get('nocache') === '1');
+      const totalPages = Math.max(1, Math.ceil(r.total / limit));
+      return {
+        list: r.list,
+        page,
+        limit,
+        total: r.total,
+        totalPages,
+        hasMore: page < totalPages,
+        cache: r.meta,
+        error: '',
+      };
+    } catch (e) {
+      // 单个鸟种读不到图片不影响档案正文：如实告诉前端，前端在图片区里显示一句人话
+      console.warn(`[api] 鸟种 ${id} 的图片取不到：` + e.message);
+      return { list: [], page, limit, total: 0, totalPages: 1, hasMore: false, error: `图片暂时读不到（${e.message}）。稍后再试。` };
     }
   },
 

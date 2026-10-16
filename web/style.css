@@ -1069,6 +1069,48 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
 .tx-p { margin: 0; font-size: 13.5px; line-height: 1.8; white-space: pre-wrap; }
 .tx-foot { font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 10px; }
 
+/* ---------------- 鸟种档案里的图片区 ---------------- */
+.tx-imgs { margin: 4px 0 14px; }
+.tx-img-btn {
+  font: inherit; font-size: 12.5px; color: var(--primary);
+  background: none; border: 1px solid var(--border-strong); border-radius: 7px;
+  padding: 4px 11px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.tx-img-btn:hover { background: #eef5fd; border-color: var(--primary); }
+.tx-img-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.tx-img-box { margin-top: 10px; }
+.tx-img-box[hidden] { display: none; }
+.tx-img-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); padding: 6px 0; }
+/* 缩略图网格：自适应列宽，手机上也能塞下 3 列 */
+.tx-img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.tx-thumb {
+  display: block; padding: 0; border: 1px solid var(--border); border-radius: 8px;
+  background: #f2f4f8; overflow: hidden; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; text-align: left;
+}
+.tx-thumb img { display: block; width: 100%; height: 88px; object-fit: cover; }
+.tx-thumb:hover { border-color: var(--primary); }
+.tx-thumb:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+/* 图片说明（日期 · 拍摄者）压在缩略图下面一行，超出一行就截断 */
+.tx-thumb-cap {
+  display: block; font-size: 11px; color: var(--text-2); padding: 3px 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tx-img-pager {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-top: 10px; font-size: 12px;
+}
+.tx-page {
+  font: inherit; font-size: 12px; color: var(--primary); background: none;
+  border: 1px solid var(--border-strong); border-radius: 6px; padding: 3px 10px; cursor: pointer;
+}
+.tx-page:disabled { color: var(--muted); border-color: var(--border); cursor: default; }
+.tx-page-info { color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .tx-img-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+  .tx-thumb img { height: 72px; }
+}
+
 /* ---------------- 手机端适配（≤ 720px） ----------------
    桌面版大量使用横向排列（顶栏、查询条件、记录检索、榜单工具栏），窄屏下会互相挤压甚至
    溢出；榜单的 156 张卡片又占了整页高度的大头。这里统一收敛为纵向堆叠，并隐去卡片上的

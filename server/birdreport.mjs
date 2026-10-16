@@ -262,6 +262,20 @@ export const getReportTaxonImages = (activityId, taxonId) =>
 export const getTaxonContent = (taxonId) => api('/front/taxon/content', { taxon_id: taxonId });
 
 /**
+ * 某个鸟种的公开图片（站点鸟种页「图片」那一路）。
+ *
+ * 参数 `{ page, limit, taxon_id }`；返回 `{ count: 总数, data: 本页数组 }`
+ * —— **count 是总数不是本页条数**（实测 taxon_id=4004：count=4，limit=3 时 data 只有 3 条），
+ * 前端翻页要靠它算总页数，别拿 data.length 当总数。
+ *
+ * 每条字段：image_url（原图）/ scale_url（缩放图）/ image_address / province_name /
+ * city_name / district_name / image_time / account（拍摄者）/ record_id / activity_id / image_id。
+ * 两个 URL 都带 OSS 签名参数（Expires 是秒级时间戳，实测给到 2076 年），可直连、可短期缓存。
+ */
+export const searchTaxonImages = ({ taxonId, page = 1, limit = 12 }) =>
+  api('/front/member/image/search', { page, limit, taxon_id: taxonId });
+
+/**
  * 鸟种保护等级（国家重点保护 / IUCN / 中国生物多样性红色名录 / 是否中国特有）
  * @returns {Promise<{taxon_id:number, china_level?:string, iucn?:string, china_iucn?:string, is_china?:string}>}
  */
