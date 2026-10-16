@@ -1524,7 +1524,10 @@ function renderTaxonImgBox() {
     .map(
       (x, i) =>
         `<button class="tx-thumb" type="button" data-idx="${i}" title="${esc([x.time, x.address, x.account].filter(Boolean).join(' · '))}">` +
-        `<img src="${esc(x.thumb || x.url)}" alt="${esc(x.taxonName || '')} 图片 ${i + 1}" loading="lazy" />` +
+        // onerror：图片取不回来时（网络不通、地址过期、被 WebView 的明文策略拦掉……）
+        // 默认是**一片空白**，用户只会说「图看不见」而说不出原因。这里给个可见的提示，
+        // 排查时能一眼看出是「地址拿到了但图没出来」，而不是「接口没数据」。
+        `<img src="${esc(x.thumb || x.url)}" alt="${esc(x.taxonName || '')} 图片 ${i + 1}" loading="lazy" onerror="this.closest('.tx-thumb').classList.add('is-broken')" />` +
         (x.time || x.account ? `<span class="tx-thumb-cap">${esc([x.time, x.account].filter(Boolean).join(' · '))}</span>` : '') +
         '</button>'
     )

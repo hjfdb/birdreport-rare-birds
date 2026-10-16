@@ -1089,6 +1089,14 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
   -webkit-tap-highlight-color: transparent; text-align: left;
 }
 .tx-thumb img { display: block; width: 100%; height: 88px; object-fit: cover; }
+/* 图取不回来时（JS 里用 onerror 打上 is-broken）：默认是整块空白，看不出是没数据还是没加载出来 */
+.tx-thumb.is-broken img { visibility: hidden; }
+.tx-thumb.is-broken::after {
+  content: '图片加载失败';
+  display: flex; align-items: center; justify-content: center;
+  height: 88px; font-size: 11px; color: var(--text-2);
+  background: repeating-linear-gradient(45deg, #f2f4f8, #f2f4f8 6px, #eaedf3 6px, #eaedf3 12px);
+}
 .tx-thumb:hover { border-color: var(--primary); }
 .tx-thumb:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 /* 图片说明（日期 · 拍摄者）压在缩略图下面一行，超出一行就截断 */
@@ -1109,6 +1117,7 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
 @media (max-width: 720px) {
   .tx-img-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
   .tx-thumb img { height: 72px; }
+  .tx-thumb.is-broken::after { height: 72px; }
 }
 
 /* ---------------- 手机端适配（≤ 720px） ----------------

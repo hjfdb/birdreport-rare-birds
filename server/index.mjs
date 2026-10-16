@@ -1053,20 +1053,34 @@ const TAXON_IMG_TTL_MS = Number(process.env.TAXON_IMG_TTL_MS || 6 * 60 * 60 * 10
 const TAXON_IMG_LIMIT = 12;
 
 /**
+ * 上游给的 OSS 图片直链一律是 **http://**（明文）。桌面浏览器无所谓，但 APK 里不行：
+ * AndroidManifest 的 networkSecurityConfig 只给回环地址开明文口子，其它域名强制 HTTPS
+ * （见 android/app/src/main/res/xml/network_security_config.xml），
+ * 所以 http 的图在 WebView 里会被直接拦掉 —— 表现就是「图片区一片空白」。
+ * 该 OSS 两种协议都能取（实测同样 200、同样字节数），统一升成 https 即可。
+ * ⚠ 凡是**要在页面里直接显示**的外链图片都必须过这一道，别再直出上游原值。
+ */
+const toHttps = (u) => String(u || '').replace(/^http:\/\//i, 'https://');
+
+// 缓存口径版本：b1 = 开始把 http 升成 https（旧的缓存里存的是 http，必须让它失效，
+// 否则用户手机上已经缓存好的那一页会一直取到加载不出来的地址）
+const TAXON_IMG_KEY_VERSION = 'b1';
+
+/**
  * 某个鸟种的公开图片（一页）。
  * @returns {{list: Array, total: number}} total 是**总数**（上游 count），翻页要用
  */
 async function loadTaxonImages(taxonId, page, limit, nocache = false) {
   const { value, meta } = await cached(
-    `taxonimg|${taxonId}|${page}|${limit}`,
+    `taxonimg|${TAXON_IMG_KEY_VERSION}|${taxonId}|${page}|${limit}`,
     async () => {
       const r = await searchTaxonImages({ taxonId, page, limit });
       const arr = Array.isArray(r.data) ? r.data : [];
       const list = arr
         .map((d) => ({
           imageId: d.image_id,
-          url: d.image_url || '', // 原图：点开看大图用它
-          thumb: d.scale_url || d.image_url || '', // 缩放图：网格里的小图用它
+          url: toHttps(d.image_url), // 原图：点开看大图用它
+          thumb: toHttps(d.scale_url || d.image_url), // 缩放图：网格里的小图用它
           address: d.image_address || '',
           place: [d.province_name, d.city_name, d.district_name].filter(Boolean).join(' · '),
           // 只要日期：上游给的是「2026-10-03 22:00:00」，网格里放不下整串
@@ -2148,9 +2162,8 @@ const routes = {
   },
 
   // 单份报告里某个鸟种的记录图片（报告详情里点「图片 N」时用）。
-  // 上游返回 {image_url} 列表（OSS 签名直链，明文不加密）。这里统一把 http 换成 https：
-  // 该 OSS 两种协议都能取（实测同样 200 同字节），而 APK 的明文策略只放行回环地址，
-  // http 的图在 WebView 里会加载不出来。
+  // 上游返回 {image_url} 列表（OSS 签名直链，明文不加密）—— 用 toHttps 升级，
+  // 原因与鸟种图片完全一样（APK 里 http 的图加载不出来），详见 toHttps 的注释。
   async 'GET /api/report-images'(q) {
     const activityId = Number(q.get('activityId')) || 0;
     const taxonId = Number(q.get('taxonId')) || 0;
@@ -2160,9 +2173,8 @@ const routes = {
       async () => {
         const r = await getReportTaxonImages(activityId, taxonId);
         const list = (Array.isArray(r.data) ? r.data : [])
-          .map((x) => String(x.image_url || ''))
-          .filter(Boolean)
-          .map((u) => u.replace(/^http:\/\//i, 'https://'));
+          .map((x) => toHttps(x.image_url))
+          .filter(Boolean);
         return { count: Number(r.count) || list.length, list };
       },
       q.get('nocache') === '1'
