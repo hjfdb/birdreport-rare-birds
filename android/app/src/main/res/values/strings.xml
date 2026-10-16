@@ -2,4 +2,8 @@
 <resources>
     <!-- 桌面图标下显示的名字。与 exe / 网页端保持同一个中文名。 -->
     <string name="app_name">观鸟地区稀有榜</string>
+
+    <!-- 「稀有监听」后台提醒用到的两条文案（WatchNotifier 引用） -->
+    <string name="watch_channel_name">稀有鸟种提醒</string>
+    <string name="watch_channel_desc">按你设定的条件盯着稀有鸟种，有新发现时通知你</string>
 </resources>

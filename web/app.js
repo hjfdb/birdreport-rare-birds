@@ -14,10 +14,14 @@ const API = (() => {
   // 不能直连上游：记录中心的接口虽然有 CORS 头，但从 file:// 发出仍会被浏览器拦下，
   // 所以取数统一交给本机服务端完成（服务端已对 /api/* 放开 Access-Control-Allow-Origin）。
   const base = location.protocol.startsWith('http') ? '' : 'http://127.0.0.1:8787';
-  return (p, q, signal) => {
+  // method 默认 GET；写操作（监听开关、清空历史）走 POST，参数照样放 query string ——
+  // 服务端路由就是按 `${method} ${pathname}` 分发、从 url.searchParams 读参数的。
+  return (p, q, signal, method) => {
     const u = new URL(base + '/api/' + p, location.href);
     if (q) for (const k in q) if (q[k] !== undefined && q[k] !== null && q[k] !== '') u.searchParams.set(k, q[k]);
-    return fetch(u, signal ? { signal } : undefined).then(async (r) => {
+    const init = { method: method || 'GET' };
+    if (signal) init.signal = signal;
+    return fetch(u, init).then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `请求失败 (${r.status})`);
       return j;
@@ -27,6 +31,20 @@ const API = (() => {
 
 /** 用 file:// 双击打开时为 true：页面本身不带服务端，取数走 http://127.0.0.1:8787 */
 const STANDALONE = !location.protocol.startsWith('http');
+
+/**
+ * Android 壳（APK）注入的桥，只有那里面才有；浏览器 / exe 里是 null。
+ * 目前只用它做两件事：申请通知权限、把「监听开着没」同步给后台轮询线程。
+ * 每次调用都要经它判空 —— 网页端不能因为拿不到桥就报错。
+ */
+const ANDROID = (() => {
+  try {
+    const b = window.BirdAndroid;
+    return b && b.isAndroid && b.isAndroid() ? b : null;
+  } catch (e) {
+    return null;
+  }
+})();
 
 /** 上一次筛选条件的本地存储键；与地址栏参数配合，实现「刷新后选择还在」 */
 const STORAGE_KEY = 'birdreport.ui.v1';
@@ -2174,6 +2192,555 @@ function closeDetail() {
 }
 
 /* ---------------------------------------------------------------- *
+ * 稀有监听：按当前条件盯住稀有鸟种，有新发现就在右下角提示
+ *
+ * 三条约定（与服务端 server/watch.mjs 完全一致，判定与去重都在服务端做，
+ * 前端只负责「按节拍问一次、有新发现就提示」）：
+ *   ① 稀有 = 该地区**最近两年记录数 ≤ 阈值**（默认 3 条，界面可调）
+ *   ② 时间窗口 = 开启监听那一刻页面上填的起止日期（**不做滚动窗口**）
+ *   ③ 频率 = 前台定时轮询（默认 10 分钟一次）；页面在后台不发请求，
+ *      那段时间交给 Android 端的后台通知
+ *
+ * ⚠ 阈值是个**绝对条数**，在大范围下很难命中。实测近两年记录数的下界：
+ *   北京市 95 条、北京朝阳区 64 条、全国 286 条 —— 所以默认的 ≤3 条
+ *   在市级以上永远返回「0 种」。界面必须把「本时段最稀有的也有 N 条」摊开，
+ *   并让阈值可调，否则用户会以为监听坏了。
+ *
+ * ⚠ 榜单的本时段清单缓存 24 小时，照抄缓存的话一天都是同一份数据（「每 10 分钟
+ *   检查」就成了摆设）。所以服务端每轮检查强制回源（nocache=1），但设了一道
+ *   **最短回源间隔**（默认 30 分钟）挡住过密的请求 —— 前端轮询比它密没关系，
+ *   没到点的轮次服务端直接复用上一轮结果（会回 nextFetchInMs）。
+ * ---------------------------------------------------------------- */
+const WATCH_THRESHOLDS = [3, 10, 50, 100, 300];
+/** 右下角提示卡最多直接列几条，剩下的引导到历史记录 */
+const WATCH_CARD_MAX = 5;
+/** 轮询间隔的兜底与安全边界（服务端会给 intervalMs，这里只防它异常） */
+const WATCH_POLL_FALLBACK_MS = 10 * 60 * 1000;
+const WATCH_POLL_MIN_MS = 60 * 1000;
+const WATCH_POLL_MAX_MS = 60 * 60 * 1000;
+
+const watchUi = {
+  snapshot: null,   // 最近一次服务端快照（enabled / history / lastError / …）
+  enabled: false,
+  threshold: 3,     // 界面上的阈值（未开启时只存在本地；开启后以服务端为准）
+  unread: 0,        // 新发现但还没打开历史记录看的条数（只做角标）
+  cardAlerts: [],   // 提示卡上正在列的那几条（点条目要能取回完整信息）
+  timer: null,
+  busy: false,      // 用户主动发起的操作（开 / 停 / 立即检查）进行中
+  polling: false,   // 定时轮询进行中
+};
+
+const watchThresholdLabel = (v) => {
+  const n = Number(v);
+  return `≤ ${fmt(n)} 条`;
+};
+/** 服务端存回来的阈值可能不在界面的档位里（走接口改过），这条给下拉补一个选项 */
+function ensureThresholdOption(v) {
+  const sel = $('selWatchThreshold');
+  const s = String(v);
+  if ([...sel.options].some((o) => o.value === s)) return s;
+  const o = document.createElement('option');
+  o.value = s;
+  o.textContent = `≤ ${fmt(v)} 条`;
+  sel.appendChild(o);
+  return s;
+}
+const watchLevelBadge = (level) =>
+  level === '国家一级'
+    ? '<span class="badge lv1">国家一级</span>'
+    : level === '国家二级'
+      ? '<span class="badge lv2">国家二级</span>'
+      : level === '三有'
+        ? '<span class="badge lv3">三有</span>'
+        : '';
+
+const fmtTime = (ts) => {
+  const d = new Date(Number(ts) || 0);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/** 监听条件的人话标签：开启时随请求发给服务端存下来，历史记录里要能看出当时盯的是什么 */
+function watchLabelText(where) {
+  const short = (s) => String(s).slice(5); // 2026-10-16 → 10-16
+  let range;
+  if (where.startTime && where.endTime) {
+    range = where.startTime === where.endTime ? short(where.startTime) : `${short(where.startTime)}~${short(where.endTime)}`;
+  } else if (where.startTime) range = `${short(where.startTime)} 起`;
+  else if (where.endTime) range = `至 ${short(where.endTime)}`;
+  else range = '全部时间';
+  // filterSummary() 给的正是「地点「奥森」」这类记录检索条件
+  return [regionText(), range, ...filterSummary()].join(' · ');
+}
+
+/* ---------------- 查询栏那一行：阈值下拉 + 开始/停止 ---------------- */
+
+function syncWatchRow() {
+  const btn = $('btnWatchToggle');
+  const sel = $('selWatchThreshold');
+  const hint = $('watchRowHint');
+  if (!btn || !sel || !hint) return;
+  const w = watchUi.snapshot;
+  const on = !!(w && w.enabled);
+
+  btn.textContent = watchUi.busy ? (on ? '处理中…' : '开启中…') : on ? '停止监听' : '开始监听';
+  btn.classList.toggle('is-on', on);
+  btn.disabled = watchUi.busy;
+  // 请求在途时**别动下拉**：这时快照还是旧的，会看到刚选的档位被弹回去
+  if (!watchUi.busy) sel.value = ensureThresholdOption(on ? w.maxHistoryCount : watchUi.threshold);
+
+  if (!on) {
+    hint.innerHTML =
+      '开启后按<b>当前条件</b>（地区 / 日期 / 检索）定期向上游取一次，新出现且<b>最近两年记录数 ≤ 阈值</b>的鸟种会在右下角提示。' +
+      '阈值是个绝对条数 —— 市级以上范围很难命中，可先用「≤ 300 条」试试。';
+    return;
+  }
+  const parts = [`已监听 <b>${esc(w.label || '当前条件')}</b>（条件定格在开启那一刻）`];
+  if (w.lastError) parts.push(`<span class="warn">${esc(w.lastError)}</span>`);
+  else if (w.scanned) {
+    parts.push(
+      `本时段 ${fmt(w.scanned)} 种，最稀有的一档 ${w.minHistoryCount === null ? '—' : fmt(w.minHistoryCount)} 条`
+    );
+  }
+  // Android 壳里才谈「通知权限」：网页端开着页面就有右下角提示，没有系统通知这回事
+  if (ANDROID) {
+    let perm = 'granted';
+    try {
+      perm = ANDROID.notifyState ? ANDROID.notifyState() : 'granted';
+    } catch (e) { /* 桥出错按已授权处理，不吓用户 */ }
+    parts.push(
+      perm === 'granted'
+        ? 'Android：应用退到后台也会发系统通知'
+        : '<span class="warn">系统通知权限未开 —— 退到后台时发现新鸟种不会提醒，请到系统设置里允许通知</span>'
+    );
+  }
+  hint.innerHTML = parts.join(' · ');
+}
+
+/* ---------------- 右下角浮标与提示卡 ---------------- */
+
+function hideWatchCard() {
+  const el = $('watchCard');
+  if (el) el.hidden = true;
+  watchUi.cardAlerts = [];
+}
+
+function renderWatchDock() {
+  const dock = $('watchDock');
+  if (!dock) return;
+  const w = watchUi.snapshot;
+  if (!w || !w.enabled) {
+    dock.hidden = true;
+    hideWatchCard();
+    watchUi.unread = 0;
+    return;
+  }
+  dock.hidden = false;
+  const pill = $('watchPill');
+  $('watchPillText').textContent = `${String(w.label || '当前条件').split(' · ')[0]} · 稀有监听`;
+  pill.classList.toggle('has-alert', watchUi.unread > 0);
+  pill.classList.toggle('is-err', !!w.lastError && watchUi.unread <= 0);
+
+  const badge = $('watchBadge');
+  badge.hidden = watchUi.unread <= 0;
+  badge.textContent = watchUi.unread > 99 ? '99+' : String(watchUi.unread);
+
+  const lines = [`监听条件：${w.label || '当前条件'}`, `稀有阈值：${watchThresholdLabel(w.maxHistoryCount)}（近两年记录数）`];
+  lines.push(`最近检查：${w.lastCheckAt ? fmtTime(w.lastCheckAt) : '—'}`);
+  if (w.scanned) lines.push(`本时段扫描 ${fmt(w.scanned)} 种，最稀有 ${w.minHistoryCount === null ? '—' : fmt(w.minHistoryCount)} 条`);
+  if (w.lastError) lines.push(`异常：${w.lastError}`);
+  if (watchUi.unread) lines.push(`有 ${watchUi.unread} 条新发现未读`);
+  lines.push('点击查看历史记录');
+  pill.title = lines.join('\n');
+}
+
+function showWatchCard(alerts) {
+  const card = $('watchCard');
+  const body = $('watchCardBody');
+  if (!card || !body) return;
+  watchUi.cardAlerts = alerts;
+  const n = alerts.length;
+  $('watchCardTitle').textContent = `发现 ${fmt(n)} 种稀有鸟种`;
+  body.innerHTML =
+    alerts
+      .slice(0, WATCH_CARD_MAX)
+      .map(
+        (a, i) => `<button class="wc-item" type="button" data-idx="${i}" data-taxon-id="${esc(a.taxonId)}">
+      <span class="wc-item-main">
+        <span class="wc-name-row"><span class="wc-name">${esc(a.name)}</span>${watchLevelBadge(a.chinaLevel)}</span>
+        <span class="wc-sub">本时段 ${fmt(a.count)} 条 · 近两年 ${fmt(a.historyCount)} 条</span>
+      </span>
+      <span class="wc-go">查看报告 ›</span>
+    </button>`
+      )
+      .join('') +
+    (n > WATCH_CARD_MAX ? `<div class="wc-more">还有 ${fmt(n - WATCH_CARD_MAX)} 种，点「查看历史记录」看全部</div>` : '');
+  card.hidden = false;
+}
+
+/* ---------------- 与服务端打交道 ---------------- */
+
+/**
+ * 把「监听开着没 + 多久轮询一次」同步给 Android 壳。
+ *
+ * 壳里有个后台线程会在应用**不在前台**时替页面问同一个接口（前台由页面自己问）——
+ * 两边一起问会互相「抢」新发现（接口是消费式的，谁先问到就归谁），所以必须分前后台。
+ * 通知权限也在这里顺手申请：Android 13 起 POST_NOTIFICATIONS 是运行时权限，
+ * 开启监听是唯一自然的申请时机。
+ */
+function syncWatchBridge() {
+  if (!ANDROID) return;
+  const w = watchUi.snapshot;
+  try {
+    ANDROID.syncWatch(!!(w && w.enabled), Number((w && w.intervalMs) || 0) || WATCH_POLL_FALLBACK_MS);
+  } catch (e) { /* 桥出问题不该影响页面本身 */ }
+}
+
+/** 申请通知权限（只在 Android 13+ 且还没授权时才会真的弹系统对话框） */
+function ensureNotifyPermission() {
+  if (!ANDROID) return;
+  try {
+    if (ANDROID.notifyState && ANDROID.notifyState() === 'granted') return;
+    if (ANDROID.requestNotify) ANDROID.requestNotify();
+  } catch (e) { /* ignore */ }
+}
+
+/** 开启（或按新条件 / 新阈值重开）监听。重开一律重建基线，但历史记录不清空。 */
+async function watchStart({ reconfig = false } = {}) {
+  const where = currentWhere();
+  // ⚠ 先把下拉里选的阈值抓下来：下面 syncWatchRow() 会把下拉重置成「上一份快照里的
+  //   阈值」，等真发请求时再读那个 value 就已经被改回去了 —— 表现出来的症状是
+  //   「监听中改阈值没反应」，而请求其实照发（带着旧阈值）。
+  const threshold = Number($('selWatchThreshold').value) || watchUi.threshold;
+  // 「全国」不带时间限制时上游会拉上千万条 —— 服务端也会拦，这里先拦一道，少一次往返
+  if (!where.province && !(where.startTime && where.endTime)) {
+    renderRegionHint();
+    showToast('「全国」范围要同时填起始与结束日期才能监听');
+    return;
+  }
+  const label = watchLabelText(where);
+  watchUi.busy = true;
+  syncWatchRow();
+  try {
+    const w = await API(
+      'watch',
+      { enabled: '1', ...where, label, maxHistoryCount: threshold },
+      null,
+      'POST'
+    );
+    watchUi.snapshot = w;
+    watchUi.enabled = !!w.enabled;
+    watchUi.threshold = Number(w.maxHistoryCount) || watchUi.threshold;
+    watchUi.unread = 0;
+    hideWatchCard();
+    renderWatchDock();
+    scheduleWatchPoll(w.intervalMs);
+    syncWatchBridge();
+    if (!reconfig) ensureNotifyPermission(); // 开启监听是申请通知权限最自然的时机
+    if (w.lastError) {
+      // 基线没建起来（上游取不到 / 历史口径缺失）：必须让用户当场知道，
+      // 否则他会以为「开着呢，等着就行」，其实是空转。
+      showToast(`监听已开，但第一轮就遇到问题：${w.lastError}`);
+    } else {
+      showToast(
+        reconfig
+          ? `已按新阈值重启监听：${watchThresholdLabel(w.maxHistoryCount)}`
+          : `已开始监听：${label} · 稀有 ${watchThresholdLabel(w.maxHistoryCount)}`
+      );
+    }
+  } catch (e) {
+    showToast('开启监听失败：' + e.message);
+  } finally {
+    watchUi.busy = false;
+    syncWatchRow();
+  }
+}
+
+async function watchStop({ silent = false } = {}) {
+  watchUi.busy = true;
+  syncWatchRow();
+  try {
+    const w = await API('watch', { enabled: '0' }, null, 'POST');
+    watchUi.snapshot = w;
+    watchUi.enabled = false;
+    watchUi.unread = 0;
+    clearTimeout(watchUi.timer);
+    watchUi.timer = null;
+    hideWatchCard();
+    renderWatchDock();
+    syncWatchBridge(); // 让 Android 的后台轮询也停下来
+    if (!silent) showToast('已停止监听（历史记录保留，可随时查看）');
+    if (!$('watchModal').hidden) renderWatchBody();
+  } catch (e) {
+    if (!silent) showToast('停止监听失败：' + e.message);
+  } finally {
+    watchUi.busy = false;
+    syncWatchRow();
+  }
+}
+
+/**
+ * 跑一轮检查。
+ * 服务端会用最短回源间隔挡住过密的请求（那时返回 skipped，没有 newAlerts）。
+ */
+async function watchCheck({ force = false, silent = true } = {}) {
+  if (watchUi.busy || watchUi.polling) return null;
+  watchUi.polling = true;
+  try {
+    const w = await API('watch/check', force ? { force: '1' } : null);
+    watchUi.snapshot = w;
+    watchUi.enabled = !!w.enabled;
+    if (!w.enabled) {
+      // 监听在别处被关掉了（另一台设备 / 服务端被重置）：Android 的后台轮询也要停
+      renderWatchDock();
+      syncWatchRow();
+      syncWatchBridge();
+      return w;
+    }
+    const fresh = Array.isArray(w.newAlerts) ? w.newAlerts : [];
+    if (fresh.length) {
+      watchUi.unread += fresh.length;
+      showWatchCard(fresh);
+      const names = fresh.slice(0, 2).map((a) => a.name).join('、');
+      showToast(`发现 ${fmt(fresh.length)} 种新出现的稀有鸟种：${names}${fresh.length > 2 ? ' 等' : ''}`);
+    }
+    renderWatchDock();
+    syncWatchRow();
+    if (!$('watchModal').hidden) renderWatchBody();
+    return w;
+  } catch (e) {
+    // 轮询失败不打扰用户（浮标上会有异常标记）；用户主动点「立即检查」时才报出来
+    if (!silent) showToast('检查失败：' + e.message);
+    return null;
+  } finally {
+    watchUi.polling = false;
+  }
+}
+
+/**
+ * 轮询排期。
+ * 页面在后台时**不发请求**，只把定时器重新排上（回到前台会立刻补一轮，见 bind 里的
+ * visibilitychange）。原因：后台标签页的定时器会被浏览器节流得乱七八糟，请求也未必
+ * 发得出去；真正「应用不在前台也要提醒」这件事交给 Android 端的后台通知去做。
+ */
+function scheduleWatchPoll(intervalMs) {
+  clearTimeout(watchUi.timer);
+  const ms = Math.min(
+    Math.max(Number(intervalMs) || WATCH_POLL_FALLBACK_MS, WATCH_POLL_MIN_MS),
+    WATCH_POLL_MAX_MS
+  );
+  watchUi.timer = setTimeout(() => {
+    if (!watchUi.enabled) return;
+    if (document.hidden) {
+      scheduleWatchPoll(ms);
+      return;
+    }
+    watchCheck({ silent: true }).then(
+      () => scheduleWatchPoll(ms),
+      () => scheduleWatchPoll(ms)
+    );
+  }, ms);
+}
+
+/** 页面恢复可见时补一轮（浏览器切回来往往已经过了好几个轮询周期） */
+function watchCatchUp() {
+  if (!watchUi.enabled || document.hidden) return;
+  watchCheck({ silent: true }).then(() => scheduleWatchPoll(watchUi.snapshot?.intervalMs));
+}
+
+/** 页面启动时恢复监听状态（不回源，只读状态） */
+async function restoreWatch() {
+  try {
+    const w = await API('watch');
+    watchUi.snapshot = w;
+    watchUi.enabled = !!w.enabled;
+    if (w.maxHistoryCount) watchUi.threshold = Number(w.maxHistoryCount);
+    syncWatchRow();
+    renderWatchDock();
+    if (w.enabled) scheduleWatchPoll(w.intervalMs);
+    syncWatchBridge(); // 应用每次起来都要把「监听开着没」告诉后台轮询线程
+  } catch (e) {
+    // 服务端不可用：保持「未监听」的外观，别把页面搞成报错脸
+    syncWatchRow();
+  }
+}
+
+/* ---------------- 历史记录弹层 ---------------- */
+
+async function openWatchModal() {
+  const el = $('watchModal');
+  if (!el) return;
+  watchUi.unread = 0;
+  renderWatchDock();
+  el.classList.remove('is-closing');
+  el.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderWatchBody();
+  // 打开时只读一次状态（不回源）：让「最近检查 / 下次回源 / 阈值」是新的
+  try {
+    const w = await API('watch');
+    watchUi.snapshot = w;
+    watchUi.enabled = !!w.enabled;
+    renderWatchDock();
+    syncWatchRow();
+    renderWatchBody();
+  } catch (e) {
+    /* 用已有快照渲染就好 */
+  }
+}
+
+/** immediate=true 时立刻隐藏（马上要开另一个弹层，别让退场动画盖在它上面） */
+function closeWatchModal(immediate = false) {
+  const el = $('watchModal');
+  if (!el || el.hidden) {
+    document.body.style.overflow = '';
+    return;
+  }
+  if (immediate) {
+    el.classList.remove('is-closing');
+    el.hidden = true;
+  } else {
+    hideAnimated(el);
+  }
+  document.body.style.overflow = '';
+}
+
+function renderWatchBody() {
+  const sub = $('watchSub');
+  const body = $('watchBody');
+  const footInfo = $('watchFootInfo');
+  if (!sub || !body) return;
+  const w = watchUi.snapshot;
+  if (!w) {
+    sub.innerHTML = '';
+    body.innerHTML = '<div class="notice">还没连上本机服务端，暂时看不到监听状态。</div>';
+    if (footInfo) footInfo.textContent = '';
+    return;
+  }
+
+  const hist = Array.isArray(w.history) ? w.history : [];
+  const th = Number(w.maxHistoryCount) || 0;
+  const chips = [];
+  if (w.label) chips.push(`<strong>${esc(w.label)}</strong>`);
+  chips.push(`稀有阈值 ${esc(watchThresholdLabel(th))}（近两年记录数）`);
+  if (w.lastCheckAt) chips.push(`最近检查 ${esc(fmtTime(w.lastCheckAt))}`);
+  if (!w.enabled) chips.push('<span class="warn">监听已停止</span>');
+  else {
+    // nextFetchInMs 只有「本轮被最短回源间隔挡下」时才有；平时用 minFetchGapMs 反推
+    const wait =
+      w.nextFetchInMs !== undefined
+        ? Number(w.nextFetchInMs)
+        : Math.max(0, Number(w.minFetchGapMs || 0) - (Date.now() - (Number(w.lastCheckAt) || 0)));
+    if (wait > 60000) chips.push(`约 ${Math.ceil(wait / 60000)} 分钟后再次回源`);
+  }
+  if (w.lastError) chips.push(`<span class="warn">${esc(w.lastError)}</span>`);
+  sub.innerHTML = chips.join(' · ');
+
+  if (footInfo) {
+    const min = Math.round(Number(w.minFetchGapMs || 0) / 60000);
+    footInfo.textContent = hist.length
+      ? `共 ${fmt(hist.length)} 条记录（最多保留 500 条）· 每轮最短间隔 ${min} 分钟`
+      : `每轮最短间隔 ${min} 分钟，避免被记录中心限流`;
+  }
+
+  // 「本时段最稀有的也有 N 条」必须摊开 —— 阈值是绝对条数，大范围下命中不了是常态
+  const notes = [];
+  if (w.scanned) {
+    notes.push(
+      `本时段共 <strong>${fmt(w.scanned)}</strong> 种鸟，其中近两年记录数最少的一档是 ` +
+        `<strong>${w.minHistoryCount === null || w.minHistoryCount === undefined ? '—' : fmt(w.minHistoryCount)}</strong> 条`
+    );
+    if (w.minHistoryCount !== null && w.minHistoryCount !== undefined && w.minHistoryCount > th) {
+      notes.push(
+        `<span class="warn">阈值 ${esc(watchThresholdLabel(th))} 在当前范围里一种也命中不了 —— 想收到提醒，把阈值提到 ` +
+          `${fmt(w.minHistoryCount)} 条以上</span>`
+      );
+    } else if (w.rareCount) {
+      notes.push(`当前阈值下命中 <strong>${fmt(w.rareCount)}</strong> 种`);
+    }
+  }
+  const sum = notes.length ? `<div class="wt-sum">${notes.join('；')}</div>` : '';
+
+  if (!hist.length) {
+    body.innerHTML =
+      sum +
+      `<div class="notice">${
+        w.enabled
+          ? '还没有发现。监听进行中 —— 按上方的条件定期回上游取数，新出现的稀有鸟种会记在这里，并在右下角提示。'
+          : '还没有发现。'
+      }</div>`;
+    return;
+  }
+
+  body.innerHTML =
+    sum +
+    '<div class="wt-list">' +
+    hist
+      .map((a, i) => {
+        const badges =
+          watchLevelBadge(a.chinaLevel) +
+          (a.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : '') +
+          iucnBadge(a.iucn);
+        const latin = a.latin ? `<span class="wt-latin">${esc(a.latin)}</span>` : '';
+        // 每条都记着「当时盯的是什么条件」：历史记录跨了条件才看得懂
+        const cond = a.label ? `<span class="wt-cond">${esc(a.label)}</span>` : '';
+        return `<button class="wt-item" type="button" data-wt-index="${i}" data-taxon-id="${esc(a.taxonId)}">
+      <span class="wt-no">${i + 1}</span>
+      <span class="wt-main">
+        <span class="wt-name-row"><span class="wt-name">${esc(a.name)}</span>${latin}${badges}</span>
+        <span class="wt-sub">本时段 ${fmt(a.count)} 条 · 近两年 ${fmt(a.historyCount)} 条</span>
+        ${cond}
+      </span>
+      <span class="wt-time">${esc(fmtTime(a.ts))}</span>
+    </button>`;
+      })
+      .join('') +
+    '</div>';
+}
+
+/** 用「当时监听的那批条件」去看这个鸟种的公开报告（跨了条件的历史记录才不会串味） */
+function openWatchTaxonReport(conditions, taxonId, name) {
+  openDetail('taxonReports', {
+    title: `${name} · 报告明细`,
+    onlyWhere: { ...(conditions || {}), taxonid: taxonId },
+  });
+}
+
+/**
+ * Android 壳在**点系统通知进来**时调它（MainActivity.openWatchIfReady）：
+ * 直接把监听历史记录打开，省得用户进来还得自己找浮标。
+ */
+window.__birdOpenWatch = () => {
+  openWatchModal();
+};
+
+/**
+ * Android 壳在后台替页面问出过新发现时，回到前台把条数补给页面。
+ *
+ * 为什么必须补：那些新鸟种在服务端已经进了「已提醒」表，页面自己的下一次 check
+ * **不会**再报一遍（这正是去重的意义）。不补的话，用户从通知点回应用会以为
+ * 「什么都变了，只有这个页面没变」。这里顺手读一次状态（不回源），把历史列表
+ * 与右下角提示卡按最新的数据铺出来。
+ */
+window.__birdWatchNotifyPending = (n) => {
+  const k = Number(n) || 0;
+  if (k <= 0) return;
+  API('watch')
+    .then((w) => {
+      watchUi.snapshot = w;
+      watchUi.enabled = !!w.enabled;
+      watchUi.unread += k;
+      // 历史是时间倒序，最前面的 k 条正是后台刚报过的那几条
+      const fresh = (Array.isArray(w.history) ? w.history : []).slice(0, k);
+      if (fresh.length) showWatchCard(fresh);
+      renderWatchDock();
+      syncWatchRow();
+      if (!$('watchModal').hidden) renderWatchBody();
+    })
+    .catch(() => { /* 服务端还没起来就算了，不打扰 */ });
+};
+
+/* ---------------------------------------------------------------- *
  * Android 返回（手势侧滑 / 返回键）→ 先关弹层
  *
  * APK 的 MainActivity 收到返回时先调这个函数：有弹层就关掉它并返回 true；
@@ -2191,6 +2758,12 @@ window.__birdHandleBack = () => {
   const pv = $('photoViewer');
   if (pv && !pv.hidden) {
     closePhotos();
+    return true;
+  }
+  // 监听历史记录
+  const wm = $('watchModal');
+  if (wm && !wm.hidden) {
+    closeWatchModal();
     return true;
   }
   const dm = $('detailModal');
@@ -2769,6 +3342,11 @@ function bind() {
       closePhotos();
       return;
     }
+    // 监听历史记录（DOM 里排在「我的」与明细之后，层级更高）
+    if (!$('watchModal').hidden) {
+      closeWatchModal();
+      return;
+    }
     // 「我的」面板在 DOM 里排在明细弹层之后（层级更高），所以先关它
     if (!$('myModal').hidden) {
       closeMy();
@@ -2813,6 +3391,76 @@ function bind() {
     if (!btn) return;
     e.preventDefault();
     openCaptcha();
+  });
+
+  // ---- 稀有监听：开关 / 阈值 / 右下角浮标 / 历史记录弹层 ----
+  $('btnWatchToggle').addEventListener('click', () => {
+    if (watchUi.snapshot && watchUi.snapshot.enabled) watchStop();
+    else watchStart();
+  });
+  // 监听中直接改阈值 = 按同一批条件重开一次（重建基线，但历史记录不清空）
+  $('selWatchThreshold').addEventListener('change', (e) => {
+    watchUi.threshold = Number(e.target.value);
+    if (watchUi.snapshot && watchUi.snapshot.enabled) watchStart({ reconfig: true });
+    else syncWatchRow();
+  });
+  $('watchPill').addEventListener('click', openWatchModal);
+  $('watchCardHistory').addEventListener('click', () => {
+    hideWatchCard();
+    openWatchModal();
+  });
+  // 只是收起卡片，监听继续；角标留着提醒「还有没看的」
+  $('watchCardClose').addEventListener('click', hideWatchCard);
+  $('watchCardStop').addEventListener('click', () => watchStop());
+  $('watchCardBody').addEventListener('click', (e) => {
+    const item = e.target.closest('.wc-item[data-idx]');
+    if (!item) return;
+    const a = watchUi.cardAlerts[Number(item.dataset.idx)];
+    if (!a) return;
+    hideWatchCard();
+    openWatchTaxonReport(a.conditions, a.taxonId, a.name);
+  });
+  $('watchClose').addEventListener('click', () => closeWatchModal());
+  $('watchModal').addEventListener('click', (e) => {
+    if (e.target === $('watchModal')) closeWatchModal(); // 点遮罩关闭
+  });
+  $('watchBody').addEventListener('click', (e) => {
+    const item = e.target.closest('.wt-item[data-wt-index]');
+    if (!item) return;
+    const a = (watchUi.snapshot?.history || [])[Number(item.dataset.wtIndex)];
+    if (!a) return;
+    closeWatchModal(true); // 立刻收起：接着要开明细弹层，别让退场动画盖在它上面
+    openWatchTaxonReport(a.conditions, a.taxonId, a.name);
+  });
+  $('btnWatchCheck').addEventListener('click', async () => {
+    const b = $('btnWatchCheck');
+    const old = b.textContent;
+    b.disabled = true;
+    b.textContent = '检查中…';
+    try {
+      const w = await watchCheck({ force: true, silent: false });
+      // 有新发现时 watchCheck 自己会弹一条带鸟种名的轻提示（还有右下角那张卡），
+      // 这里只在「什么都没发现」时补一句，免得两条提示互相覆盖
+      if (w && w.enabled && !(w.newAlerts || []).length) showToast('检查完成：没有新的稀有鸟种');
+    } finally {
+      b.disabled = false;
+      b.textContent = old;
+    }
+  });
+  $('btnWatchClear').addEventListener('click', async () => {
+    try {
+      const w = await API('watch/history', null, null, 'POST');
+      watchUi.snapshot = w;
+      renderWatchBody();
+      showToast('已清空监听记录（已提醒过的鸟种不会重复报）');
+    } catch (e) {
+      showToast('清空失败：' + e.message);
+    }
+  });
+  $('btnWatchStop').addEventListener('click', () => watchStop());
+  // 回到前台补一轮：切回来时往往已经过了好几个轮询周期
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) watchCatchUp();
   });
 
   // ---- 「我的」：绑定用户名 / 解绑 / 只看未加新 / 重新获取名单 ----
@@ -2952,4 +3600,8 @@ async function restoreRegion(init) {
   // 把归一化后的条件写回地址栏与本地存储，保证三者一致
   persist();
   runQuery();
+
+  // 监听状态存在服务端（data/watch.json），这里只把状态读回来：
+  // 刷新页面 / 换设备打开，监听开着就继续开着
+  restoreWatch();
 })();

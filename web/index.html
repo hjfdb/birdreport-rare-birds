@@ -89,6 +89,32 @@
       <button class="btn btn-mini" id="btnResetFilters" title="清空观测地点 / 用户名称 / 鸟种名称">清空检索</button>
       <button class="btn btn-primary" id="btnQuery">查询</button>
       <div class="filter-hint" id="filterHint" hidden></div>
+
+      <!-- 稀有监听：按当前条件盯住稀有鸟种，有新发现就在右下角提示（Android 端另有系统通知）。
+           「稀有」的口径是「该地区最近两年记录数 ≤ 阈值」——这是个**绝对**条数，
+           所以在北京市（实测最少 95 条）/ 全国（最少 286 条）这种大范围下，默认的 3 条
+           永远命中不了。阈值因此做成可调的，并在「历史记录」里把「本时段最稀有的也有 N 条」
+           摊开来说，免得让人以为监听坏了。 -->
+      <div class="watch-row" id="watchRow">
+        <span class="wr-label">
+          <svg class="wr-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M2.6 8.4a5.4 5.4 0 0 1 10.8 0" />
+            <path d="M8 8.4 10.6 5.6" />
+            <path d="M2.2 11.4a7 7 0 0 0 11.6 0" />
+          </svg>稀有监听
+        </span>
+        <select id="selWatchThreshold" class="mini-select"
+          title="稀有判定：该地区「最近两年记录数」不超过这个条数才算稀有">
+          <option value="3">≤ 3 条 · 极稀有</option>
+          <option value="10">≤ 10 条</option>
+          <option value="50">≤ 50 条</option>
+          <option value="100">≤ 100 条</option>
+          <option value="300">≤ 300 条</option>
+        </select>
+        <button class="btn btn-mini" id="btnWatchToggle" type="button">开始监听</button>
+        <span class="wr-hint" id="watchRowHint"></span>
+      </div>
     </section>
 
     <!-- 概览 -->
@@ -313,6 +339,51 @@
       <button class="pv-close" id="pvClose" aria-label="关闭" title="关闭（Esc）">×</button>
     </div>
     <div class="pv-body" id="pvBody"></div>
+  </div>
+
+  <!-- 右下角监听浮标：开启监听后常驻；有新发现时展开成一张提示卡，点它可以看历史记录。
+       层级（z-index 55）**刻意压在弹层遮罩（60）之下**：开着明细 / 我的等弹层时，
+       它自动被遮罩盖住、点不到，不会在弹层上面浮着碍事。 -->
+  <div class="watch-dock" id="watchDock" hidden>
+    <div class="watch-card" id="watchCard" hidden aria-live="polite">
+      <div class="wc-head">
+        <strong id="watchCardTitle">发现稀有鸟种</strong>
+        <button class="wc-close" id="watchCardClose" type="button" aria-label="收起提示" title="收起提示（继续监听）">×</button>
+      </div>
+      <div class="wc-body" id="watchCardBody"></div>
+      <div class="wc-foot">
+        <button class="btn btn-mini btn-primary" id="watchCardHistory" type="button">查看历史记录 ›</button>
+        <button class="btn btn-mini" id="watchCardStop" type="button">停止监听</button>
+      </div>
+    </div>
+    <button class="watch-pill" id="watchPill" type="button" aria-haspopup="dialog" aria-controls="watchModal"
+      title="查看监听状态与历史记录">
+      <span class="wp-dot" aria-hidden="true"></span>
+      <span class="wp-text" id="watchPillText">监听中</span>
+      <span class="wp-badge" id="watchBadge" hidden>0</span>
+    </button>
+  </div>
+
+  <!-- 监听历史记录：时间倒序，点一条就去那个鸟种上「看它出现在哪些公开报告」 -->
+  <div id="watchModal" class="modal-mask" hidden>
+    <div class="modal modal-watch" role="dialog" aria-modal="true" aria-labelledby="watchTitle">
+      <div class="modal-head">
+        <h3 id="watchTitle">监听 · 稀有鸟种记录</h3>
+        <button class="modal-close" id="watchClose" aria-label="关闭" title="关闭（Esc）">×</button>
+      </div>
+      <div class="modal-sub" id="watchSub"></div>
+      <div class="modal-body" id="watchBody"></div>
+      <div class="modal-foot" id="watchFoot">
+        <span class="pager-info" id="watchFootInfo"></span>
+        <div class="pager-btns">
+          <button class="btn btn-mini" id="btnWatchCheck" type="button"
+            title="忽略最短回源间隔，立刻向上游取一次（会真的发请求，别连点）">立即检查</button>
+          <button class="btn btn-mini" id="btnWatchClear" type="button"
+            title="清空这里的记录；已经提醒过的鸟种不会因此重复报">清空记录</button>
+          <button class="btn btn-mini" id="btnWatchStop" type="button">停止监听</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- 记录中心限流（code 505 / 405）时的验证码浮层：验证码在应用内解决，不跳出应用。

@@ -1,8 +1,10 @@
 package com.birdreport.hot;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -30,7 +32,8 @@ import java.net.URL;
  *
  * 结构很简单：先在后台线程里把 Node 服务端跑起来（内容就是网页端那套 server/*.mjs），
  * 等服务端在本机 8787 端口能应答了，再用 WebView 打开 http://127.0.0.1:8787/。
- * 网页、接口、缓存全都在 Node 那边，这边只是个壳。
+ * 网页、接口、缓存全都在 Node 那边，这边只是个壳（外加一层很薄的 JS 桥，
+ * 只为了通知权限与后台轮询，见 AndroidBridge / WatchNotifier）。
  */
 public class MainActivity extends Activity {
 
@@ -39,18 +42,43 @@ public class MainActivity extends Activity {
     private static final String HOME = "http://127.0.0.1:" + PORT + "/";
     private static final long MAX_WAIT_MS = 60_000L;
 
+    /** 点通知进来时要直接打开「监听历史记录」 */
+    public static final String EXTRA_OPEN_WATCH = "openWatch";
+
     private WebView web;
     private LinearLayout splash;
     private TextView splashText;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean pageLoaded = false;
 
+    private WatchNotifier notifier;
+    /** 页面已加载完、就等它打开监听记录（点通知进来的情况） */
+    private boolean openWatchPending = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        WatchNotifier.ensureChannel(this);
+        notifier = new WatchNotifier(this, HOME);
         buildUi();
+        // 网页要用的桥：只暴露通知权限与后台轮询（页面里用 window.BirdAndroid 判断）
+        web.addJavascriptInterface(new AndroidBridge(this, notifier), "BirdAndroid");
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_OPEN_WATCH, false)) {
+            openWatchPending = true;
+        }
         startNode();
         waitForServer();
+    }
+
+    /** 点通知后应用可能已经在运行：singleTask + SINGLE_TOP 会把 Intent 送到这里 */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && intent.getBooleanExtra(EXTRA_OPEN_WATCH, false)) {
+            openWatchPending = true;
+            openWatchIfReady();
+        }
     }
 
     /* ---------------------------------------------------------------- *
@@ -97,6 +125,8 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageLoaded = true;
                 splash.setVisibility(View.GONE);
+                openWatchIfReady();
+                flushPendingAlerts();
             }
         });
         root.addView(web, new FrameLayout.LayoutParams(
@@ -120,6 +150,49 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+    }
+
+    /* ---------------------------------------------------------------- *
+     * 通知：权限申请 / 点通知进页面 / 把后台发现过的条数交给页面
+     * ---------------------------------------------------------------- */
+
+    /** 网页端通过 JS 桥调（targetSdk 33 起 POST_NOTIFICATIONS 必须运行时申请） */
+    public void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) {
+            return;
+        }
+        if ("granted".equals(WatchNotifier.permissionState(this))) {
+            return;
+        }
+        try {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, AndroidBridge.REQ_NOTIFY);
+        } catch (Throwable t) {
+            Log.w(TAG, "申请通知权限失败：" + t);
+        }
+    }
+
+    private void openWatchIfReady() {
+        if (!pageLoaded || !openWatchPending || web == null) {
+            return;
+        }
+        openWatchPending = false;
+        web.evaluateJavascript("window.__birdOpenWatch && window.__birdOpenWatch();", null);
+    }
+
+    /**
+     * 后台轮询发现过、但页面当时不在前台的条数：回到前台交给页面补个角标。
+     * ⚠ 那几条在服务端已经被记进「已提醒」表了，页面的下一次 check 不会再报一次 ——
+     *   所以这里必须把条数补给它，否则用户回到应用会以为「什么都没发生」。
+     */
+    private void flushPendingAlerts() {
+        if (notifier == null || !pageLoaded || web == null) {
+            return;
+        }
+        int n = notifier.takePending();
+        if (n <= 0) {
+            return;
+        }
+        web.evaluateJavascript("window.__birdWatchNotifyPending && window.__birdWatchNotifyPending(" + n + ");", null);
     }
 
     private void showMessage(final String msg) {
@@ -216,6 +289,29 @@ public class MainActivity extends Activity {
     /* ---------------------------------------------------------------- *
      * 生命周期
      * ---------------------------------------------------------------- */
+
+    /**
+     * 前台的判定交给这里：网页端在页面前台时自己轮询 /api/watch/check，退到后台就停；
+     * 后台那一份由 WatchNotifier 接手 —— 两边都开着会互相「抢」新发现（接口是消费式的，
+     * 谁先问到就归谁），所以必须一前一后。详见 WatchNotifier 的类注释。
+     */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (notifier != null) {
+            notifier.setForeground(true);
+        }
+        // 后台期间发现过的条数，这时补给页面（它自己的 check 已经拿不到了）
+        flushPendingAlerts();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (notifier != null) {
+            notifier.setForeground(false);
+        }
+    }
 
     /**
      * 返回（手势侧滑 / 返回键）先在页面里走一层：弹层（「我的」/ 明细 / 报告详情 /

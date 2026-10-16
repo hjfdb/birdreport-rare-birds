@@ -4,6 +4,12 @@
     <!-- 服务端要在手机上直接访问 api.birdreport.cn，需要联网 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 「稀有监听」发现新的稀有鸟种时发系统通知。
+         Android 13（API 33）起这是**运行时**权限：清单里声明只是前提，
+         真正授权要等用户点掉系统对话框 —— 页面在开启监听时会通过 JS 桥
+         （window.BirdAndroid.requestNotify）主动申请一次，见 AndroidBridge。
+         13 以前这条声明会被系统忽略（安装即得，用户可在系统设置里关）。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="@string/app_name"

@@ -1,0 +1,16 @@
+<!--
+  状态栏通知图标。
+
+  必须是**纯单色**的：Android 5.0 起状态栏图标只取 alpha 通道，带颜色的图会被系统
+  压成一坨实心白块（直接拿 ic_launcher 当小图标就是这个下场，看着像糊了一块）。
+  fillColor 写白色即可 —— 会被系统按当前状态栏配色重新染色。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,22c1.1,0 2,-0.9 2,-2h-4c0,1.1 0.9,2 2,2zM18,16v-5c0,-3.07 -1.63,-5.64 -4.5,-6.32L13.5,4c0,-0.83 -0.67,-1.5 -1.5,-1.5s-1.5,0.67 -1.5,1.5v0.68C7.64,5.36 6,7.92 6,11v5l-2,2v1h16v-1l-2,-2z" />
+</vector>

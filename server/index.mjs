@@ -42,6 +42,7 @@ import {
 import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
 import { IS_SEA, readWebFile, webSourceText, openInBrowser, shouldOpenBrowser } from './runtime.mjs';
+import { createWatch, pickConditions } from './watch.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -241,6 +242,20 @@ function regionLabel(where) {
   // 直辖市的「市」与「省」同名，标签里只保留一个，避免「北京市 / 北京市」
   const parts = [where.province, where.city === where.province ? '' : where.city, where.district].filter(Boolean);
   return parts.length ? parts.join(' / ') : '全国';
+}
+
+/**
+ * 监听条件的人类可读标签 —— 系统通知的正文、历史记录里都要用它。
+ * 页面自己知道「观测地点 / 记录人 / 鸟种」的显示名，所以它会传一个更完整的 label 过来；
+ * 这里只是没传时的兜底（鸟种在条件里只有 id，看不出是什么鸟）。
+ */
+function watchLabel(where) {
+  const date = !where.startTime
+    ? '全部时间'
+    : where.endTime && where.endTime !== where.startTime
+      ? `${where.startTime.slice(5)} ~ ${where.endTime.slice(5)}`
+      : where.startTime.slice(5);
+  return `${regionLabel(where)} · ${date}`;
 }
 
 /**
@@ -2179,8 +2194,70 @@ const routes = {
       protection: protectionStatus(),
     };
   },
+
+  /* ---------------------------------------------------------------- *
+   * 「按当前条件监听稀有鸟种」
+   *
+   * 状态（条件快照 / 阈值 / 基线 / 历史）全在服务端，落在 <数据目录>/watch.json。
+   * 放服务端而不是 localStorage 是有原因的：Android 的**系统通知**由 Java 侧的后台线程发，
+   * 它读不到 WebView 的 localStorage，只能来问本机服务端。于是「谁先发现谁消费」天然只会
+   * 通知一次 —— 新提醒在 check 里就写进 alerted 表了。
+   * ---------------------------------------------------------------- */
+
+  // 只看状态，不回源（页面刷新 / 打开监听面板时用）
+  async 'GET /api/watch'() {
+    return watch.current();
+  },
+
+  // 开启 / 关闭监听，或改条件与阈值（都用查询参数，键名与 buildWhere 一致）
+  async 'POST /api/watch'(q) {
+    const enabled = q.get('enabled') === '1';
+    const where = buildWhere(q);
+    const conditions = pickConditions(where);
+    // 「全国」不带起止日期时上游那个量级查不动，直接挡住，
+    // 别让用户开成一个永远不会响的监听
+    if (enabled && nationalNeedsRange(where)) {
+      throw new HttpError(400, '监听「全国」需要同时选择起始日期与结束日期');
+    }
+    return watch.configure({
+      enabled,
+      conditions,
+      label: (q.get('label') || '').trim() || watchLabel(where),
+      maxHistoryCount: q.get('maxHistoryCount'),
+      intervalMs: q.get('intervalMs'),
+    });
+  },
+
+  // 跑一轮检查。force=1 忽略最短回源间隔（「立即检查」按钮用）
+  async 'GET /api/watch/check'(q) {
+    return watch.check({ force: q.get('force') === '1' });
+  },
+
+  // 清空历史记录（基线与「已提醒」表不动，所以清完不会把旧鸟再报一遍）
+  async 'POST /api/watch/history'() {
+    return watch.clearHistory();
+  },
 };
 
+/**
+ * 监听器实例。
+ *
+ * 放在 routes 之后定义、被路由闭包引用 —— 路由处理器只在请求到达时才执行，
+ * 那时这里的 const 早就初始化完了，不会踩到暂时性死区。
+ *
+ * loadHot 直接复用 /api/hot 这个路由处理器本身：榜单的成员口径、历史稀有度排序、
+ * 各项缓存（本时段清单 24 小时、历史 1 个月）全都原样生效，监听这边不用再拼一遍查询。
+ * 唯一要注意的是**必须带 nocache** —— 否则 24 小时缓存会让「每 10 分钟看看有没有新鸟」
+ * 一天都拿到同一份数据（见 watch.mjs 文件头的实测说明）。
+ */
+const watch = createWatch({
+  dataDir: DATA_DIR,
+  loadHot: (conditions, { nocache } = {}) =>
+    routes['GET /api/hot'](new URLSearchParams({ ...conditions, ...(nocache ? { nocache: '1' } : {}) })),
+  log: (m) => console.log(m),
+});
+
+/** 带 HTTP 状态码的业务错误；路由抛它、顶层按 code 回给前端 */
 class HttpError extends Error {
   constructor(code, message) {
     super(message);
