@@ -38,6 +38,7 @@ import {
   getActivityTaxons,
   getMemberTimeline,
   getReportTaxonImages,
+  getTaxonContent,
 } from './birdreport.mjs';
 import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
@@ -992,6 +993,56 @@ const puzzleLoader = (user) => async () => {
   };
 };
 
+/**
+ * 鸟种档案（收集拼图里点某个鸟名时看的那一份）几乎不变：名录条目只有换版才会改。
+ * 缓存 30 天，同一个种点第二次是零请求。
+ */
+const TAXON_TTL_MS = Number(process.env.TAXON_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+
+/**
+ * 单个鸟种的档案：中文名 / 学名 / 英文名 / 拼音 / 目科 / 习性 / 辨识特征 / 分布。
+ *
+ * ⚠ 上游 front/taxon/content 是**一次查一个 id**，所以绝不能在铺拼图时批量拉
+ *   （郑四名录有 1500+ 种，那会瞬间打满上游风控）。只有用户点开某一种才发一次。
+ */
+async function loadTaxonContent(taxonId, nocache = false) {
+  const { value, meta } = await cached(
+    `taxon|${taxonId}`,
+    async () => {
+      const r = await getTaxonContent(taxonId);
+      const d = r.data && typeof r.data === 'object' ? r.data : null;
+      // 上游对这个接口「查不到」的表现是 success=true + data 为空 / null，不会报错。
+      // 必须当成失败抛出去：空档案写进缓存会让这一格点开永远是空白，且一整天都不恢复。
+      if (!d || (!d.name && !d.latinname)) throw new Error('上游没有返回这个鸟种的资料');
+      // 上游的字段类型不统一：正文是字符串，而 guidebooksn / serial_id 是数字
+      // （淡眉柳莺就是 886）。只认字符串会把编号整段丢成空 —— 数字也照收，0 视为没有。
+      const txt = (v) => (typeof v === 'number' ? (v ? String(v) : '') : typeof v === 'string' ? v.trim() : '');
+      // version 形如「Z4-67FA07177A544FBD96006A7CC7489D25」：前面是名录代号，后面是这份
+      // 记录的内部串号。整串铺到页面上又长又没意义，只留代号。
+      const shortVer = (v) => txt(v).replace(/-[0-9a-fA-F]{12,}$/, '');
+      return {
+        id: Number(d.id) || Number(taxonId) || 0,
+        name: txt(d.name),
+        latin: txt(d.latinname),
+        english: txt(d.englishname),
+        pinyin: txt(d.pinyin),
+        szm: txt(d.szm),
+        order: txt(d.taxonordername),
+        family: txt(d.taxonfamilyname),
+        habit: txt(d.habit),
+        feature: txt(d.feature),
+        spread: txt(d.spread),
+        // 《中国鸟类野外手册》编号：跟名录顺序一致，老观鸟人习惯用它指代鸟种
+        guidebookSn: txt(d.guidebooksn) || txt(d.serial_id),
+        version: shortVer(d.version),
+      };
+    },
+    nocache,
+    { ttl: TAXON_TTL_MS }
+  );
+  return { ...value, meta };
+}
+
 /** 取某个用户的收集拼图（与人生名册同节奏缓存 24 小时，避免每次打开都重铺 1595 行） */
 async function loadPuzzle(user, nocache = false) {
   const { value, meta } = await cached(
@@ -1581,6 +1632,9 @@ const routes = {
     else if (filter === 'protected') list = list.filter((x) => x.chinaLevel);
     else if (filter === 'chinaEndemic') list = list.filter((x) => x.chinaEndemic);
     else if (filter === 'doubt') list = list.filter((x) => x.doubt);
+    // 「不含全疑问」：本时段记录**全部被**上游标疑的种不参与排行 —— 它们一条正常记录
+    // 都没有，排在稀有榜里等于「这个种根本没法确认来过」。半疑半正常的种保留。
+    else if (filter === 'nodoubt') list = list.filter((x) => !(x.doubtCount > 0 && x.doubtCount >= (Number(x.count) || 0)));
     else if (filter === 'lifer') list = list.filter((x) => x.lifer);
 
     // min / max 都取「最近两年」口径（即排序依据本身）
@@ -1857,6 +1911,28 @@ const routes = {
         collectedInCatalog: 0,
         error: `拼图取不到：「${user}」的记录没能从记录中心读到（${e.message}）。稍后再试，或核对用户名。`,
       };
+    }
+  },
+
+  /**
+   * 单个鸟种的档案（收集拼图里点鸟名时看的那一份）。
+   *
+   * 参数：id（taxon_id，数字）；nocache=1 强制回源。
+   * 与拼图整份数据不同，这个是**点了才查**的：上游一次只认一个 id，
+   * 缓存 30 天（名录条目很少变），同一个种再点开是零请求。
+   */
+  async 'GET /api/taxon/content'(q) {
+    const id = Number(q.get('id'));
+    if (!Number.isFinite(id) || id <= 0) {
+      return { error: '缺少或非法的 id 参数（要传数字 taxon_id）' };
+    }
+    try {
+      const t = await loadTaxonContent(id, q.get('nocache') === '1');
+      return { ...t, error: '' };
+    } catch (e) {
+      // 单种读不到不影响其它格子：如实告诉前端，前端在弹层里显示一句人话
+      console.warn(`[api] 鸟种档案 ${id} 取不到：` + e.message);
+      return { id, error: `这个鸟种的资料暂时读不到（${e.message}）。稍后再试。` };
     }
   },
 

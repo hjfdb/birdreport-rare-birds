@@ -1208,10 +1208,27 @@ async function loadPuzzle(nocache = false) {
   if (detail.open && detail.kind === 'puzzle') renderPuzzle();
 }
 
-/** 单格：已收集上色 + 记录次数，未收集灰色。tl 是给鼠标悬停看的学名 */
-const pzTile = (s) =>
-  `<span class="pz-tile${s.got ? ' is-got' : ''}" title="${esc(s.latin || '')}${s.got ? '' : ' · 还没有记录'}">` +
-  `${esc(s.name)}</span>`;
+/**
+ * 单格：已收集上色 + 记录次数，未收集灰色。tl 是给鼠标悬停看的学名。
+ *
+ * 用 <button> 而不是 <span>：点鸟名要弹出这个鸟种的档案（见 openTaxonCard），
+ * 按钮天生可聚焦、可回车 / 空格触发，触屏上也吃得下（拼图一格只有 12px 字高，
+ * 命中区太小的问题交给样式里的 padding 补）。
+ * ⚠ 只有**名录里有 id** 的格子才可点 —— 少数行没有 taxonId，点了也查不到档案。
+ */
+const pzTile = (s) => {
+  const clickable = !!s.taxonId;
+  const tag = clickable ? 'button' : 'span';
+  const attrs = clickable
+    ? ` type="button" data-taxon-id="${esc(s.taxonId)}" data-taxon-name="${esc(s.name)}"` +
+      `${s.got ? ` data-taxon-count="${esc(s.count)}"` : ''}`
+    : '';
+  return (
+    `<${tag} class="pz-tile${s.got ? ' is-got' : ''}${clickable ? ' is-link' : ''}"` +
+    `${attrs} title="${esc(s.latin || '')}${s.got ? '' : ' · 还没有记录'}${clickable ? ' · 点开看这个鸟种' : ''}">` +
+    `${esc(s.name)}</${tag}>`
+  );
+};
 
 function renderPuzzle() {
   const p = state.puzzle;
@@ -1287,6 +1304,130 @@ function renderPuzzle() {
     </div>`;
       })
       .join('') +
+    '</div>';
+}
+
+/* ------------------------------------------------------------------ *
+ * 鸟种档案（收集拼图里点鸟名）
+ *
+ * 拼图铺的是**名录**的一千五百多个格子，鸟种资料却只能一个一个查
+ * （上游 front/taxon/content 一次只认一个 taxon_id），所以这里是
+ * 「点了才查」：点开某一格 → 服务端回源一次并缓存 30 天 → 在同一个弹层里
+ * 把拼图换成这个鸟种的档案，头部出现「‹ 返回」回到拼图（层内换视图，见 paneNav）。
+ * ------------------------------------------------------------------ */
+
+/** 档案视图里顺带带过来的上下文：这个种我记过几次（拼图格子上就有，不用再查） */
+let taxonCardCtx = { count: 0 };
+
+/**
+ * 进档案前拼图的滚动位置：返回时要回到原处。
+ * 没有它的话返回会整页滚回最上面 —— 因为 renderPuzzle() 是重画整个 #detailBody 的
+ * innerHTML，滚动条跟着新 DOM 归零（用户报告：翻到下面点开一种，返回又回到顶部）。
+ */
+let puzzleScrollPos = 0;
+
+/**
+ * 点鸟名 → 打开档案。
+ * @param {number|string} taxonId 名录 id；没有 id 的格子根本渲染不成按钮，这里再兜一次
+ * @param {string} name 鸟名（先拿它当标题，资料回来后再校正）
+ */
+async function openTaxonCard(taxonId, name, count) {
+  const id = Number(taxonId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  detail.pane = 'taxon';
+  detail.taxonId = String(id);
+  taxonCardCtx = { count: Number(count) || 0 };
+  puzzleScrollPos = $('detailBody').scrollTop; // 记下拼图当前位置，返回时还原
+  $('btnDetailBack').hidden = false;
+  $('detailTools').hidden = true; // 筛选 / 排序是列表的工具，档案里不适用
+  $('detailFoot').hidden = true; // 分页同理
+  $('detailTitle').textContent = name || '鸟种资料';
+  $('detailSub').innerHTML = '';
+  const body = $('detailBody');
+  // 冻结窗口高度再换内容：拼图内容高、转圈只有一行，不冻结的话窗口会先缩成一条
+  // （弹层高度是跟着内容走的），档案回来又突然撑大 —— 用户看到的就是中间「闪一下」。
+  // 冻结到档案关闭（closeTaxonCard）才解除：档案比冻结高度矮时底部留白，也比跳变小好。
+  body.style.minHeight = body.clientHeight + 'px';
+  body.innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取鸟种资料…</p></div>';
+  body.scrollTop = 0;
+  paneNav('pane-push'); // 进档案：从右侧推入
+  try {
+    const r = await API('taxon/content', { id });
+    // 期间可能已经点了「返回」或点了另一种鸟：迟到的响应直接丢弃
+    if (detail.pane !== 'taxon' || detail.taxonId !== String(id)) return;
+    renderTaxonCard(r, name);
+  } catch (e) {
+    if (detail.pane !== 'taxon' || detail.taxonId !== String(id)) return;
+    $('detailBody').innerHTML = errNoticeHtml('读取鸟种资料失败：', e.message);
+  }
+}
+
+/** 从档案返回拼图（或返回来时的那个列表）：按原状态重画 */
+function closeTaxonCard() {
+  if (detail.pane !== 'taxon') return;
+  const backToId = detail.taxonId;
+  detail.pane = 'list';
+  detail.taxonId = '';
+  taxonCardCtx = { count: 0 };
+  $('btnDetailBack').hidden = detail.kind === 'puzzle' || detail.kind === 'liferList' || detail.kind === 'todo';
+  // 拼图不翻页；其余列表（报告明细）要恢复分页条
+  $('detailTools').hidden = false;
+  $('detailFoot').hidden = detail.kind === 'puzzle';
+  $('detailTitle').textContent = detail.listTitle || '明细';
+  if (detail.kind === 'puzzle') renderPuzzle();
+  else renderDetail();
+  // 返回后还原拼图原来的滚动位置 —— 重画 innerHTML 已经把滚动条归零了，
+  // 不还原的话，翻到很下面点开一种，返回就得从头再找
+  const body = $('detailBody');
+  body.style.minHeight = ''; // 解除高度冻结（openTaxonCard 里冻的）：拼图自己会撑回原来的高度
+  body.scrollTop = puzzleScrollPos;
+  // 键盘用户：焦点落回刚才点的那一格（按钮被重画过，按 id 找回来）；
+  // preventScroll 防止聚焦时浏览器再滚动一次、把刚还原的位置顶歪
+  if (backToId) {
+    const t = body.querySelector(`.pz-tile[data-taxon-id="${backToId}"]`);
+    if (t) t.focus({ preventScroll: true });
+  }
+  paneNav('pane-pop'); // 返回：从左侧推回，跟「进档案」方向相反
+}
+
+/** 档案正文：名称三件套 → 分类 → 习性 / 辨识 / 分布 → 名录出处 */
+function renderTaxonCard(r, fallbackName) {
+  if (!r || r.error) {
+    $('detailBody').innerHTML = `<div class="notice error">${esc((r && r.error) || '没有读到这个鸟种的资料。')}</div>`;
+    return;
+  }
+  const name = r.name || fallbackName || '—';
+  $('detailTitle').textContent = name;
+
+  // 副标题：学名（斜体）+ 英文名。没有学名时退化成拼音，别留一片空白
+  const subBits = [r.latin ? `<i class="tx-latin">${esc(r.latin)}</i>` : '', r.english ? esc(r.english) : ''].filter(
+    Boolean
+  );
+  $('detailSub').innerHTML = subBits.join(' · ') || (r.pinyin ? esc(r.pinyin) : '');
+
+  const kv = (label, val) => (val ? `<div class="tx-kv"><span class="tx-k">${esc(label)}</span><span class="tx-v">${esc(val)}</span></div>` : '');
+  // 正文段落：上游的 habit / feature / spread 是长文本，可能整段为空 —— 空的不出块
+  const block = (label, val) =>
+    val
+      ? `<div class="tx-block"><div class="tx-block-h">${esc(label)}</div><p class="tx-p">${esc(val)}</p></div>`
+      : '';
+
+  const mine = taxonCardCtx.count > 0 ? `<div class="tx-mine">我记过 <b>${fmt(taxonCardCtx.count)}</b> 次</div>` : '';
+
+  $('detailBody').innerHTML =
+    `<div class="tx-card">` +
+    `<div class="tx-head">${mine}</div>` +
+    '<div class="tx-grid">' +
+    kv('目', r.order) +
+    kv('科', r.family) +
+    kv('拼音', r.pinyin) +
+    kv('手册编号', r.guidebookSn) +
+    '</div>' +
+    block('生境习性', r.habit) +
+    block('辨识特征', r.feature) +
+    block('分布范围', r.spread) +
+    `<div class="tx-foot">资料来自中国观鸟记录中心鸟种名录${r.version ? ` · ${esc(r.version)}` : ''}` +
+    ` · 名录 id ${esc(String(r.id || detail.taxonId || ''))}</div>` +
     '</div>';
 }
 
@@ -2077,10 +2218,13 @@ const detail = {
   q: '',
   sort: 'record',
   meta: null,
-  /** 'list' = 明细列表；'report' = 应用内的报告详情（点行进入，可返回）。
+  /** 'list' = 明细列表；'report' = 应用内的报告详情（点行进入，可返回）；
+      'taxon' = 某个鸟种的档案（拼图里点鸟名进入，可返回）。
       注意别叫 view —— detail.view 是「筛选后的行数组」，两者名字必须分开 */
   pane: 'list',
   reportId: '',
+  /** 'taxon' 视图下正在看的鸟种 id：用来丢弃迟到的响应（点了 A 又点 B） */
+  taxonId: '',
   /** 列表视图的标题：从报告详情返回时用来还原弹层标题 */
   listTitle: '',
 };
@@ -2110,6 +2254,7 @@ async function openDetail(metric, opts = {}) {
     meta: null,
     pane: 'list',
     reportId: '',
+    taxonId: '',
     listTitle: opts.title || m.title,
     returnToMy: false,
   });
@@ -2122,6 +2267,9 @@ async function openDetail(metric, opts = {}) {
   $('detailTools').hidden = false;
   $('detailFoot').hidden = false;
   $('detailSub').innerHTML = '';
+  // 鸟种档案为了防跳变冻结过 detailBody 的高度（见 openTaxonCard）；若上次是从档案
+  // 直接 × 掉弹层的，冻结值还在 —— 开任何新视图前都必须解除，否则转圈会占着旧高度。
+  $('detailBody').style.minHeight = '';
   $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取明细…</p></div>';
   if (swapping) paneNav('pane-push'); // 弹层没动、只有内容换了：补一次推入
   $('dPageInfo').textContent = '';
@@ -3219,6 +3367,10 @@ window.__birdHandleBack = () => {
       closeReport(); // 报告详情：返回 = 回明细列表
       return true;
     }
+    if (detail.pane === 'taxon') {
+      closeTaxonCard(); // 鸟种档案：返回 = 回拼图
+      return true;
+    }
     closeDetail();
     return true;
   }
@@ -3437,8 +3589,12 @@ async function openReport(reportId) {
   $('detailFoot').hidden = true; // 分页同理
   $('detailTitle').textContent = '报告详情';
   $('detailSub').innerHTML = '';
-  $('detailBody').innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取报告…</p></div>';
-  $('detailBody').scrollTop = 0;
+  const body = $('detailBody');
+  // 冻结窗口高度再换内容（同 openTaxonCard）：列表很高、转圈只有一行，
+  // 不冻结的话窗口会先缩成一条、报告回来又突然撑大 —— 中间会「闪一下」。
+  body.style.minHeight = body.clientHeight + 'px';
+  body.innerHTML = '<div class="detail-loading"><div class="spinner"></div><p>正在读取报告…</p></div>';
+  body.scrollTop = 0;
   paneNav('pane-push'); // 进报告详情：从右侧推入（层内换视图原本是硬切）
   try {
     const r = await API('report', { reportId, liferUser: state.lifer, ...detail.where });
@@ -3460,12 +3616,15 @@ function closeReport() {
   $('detailTools').hidden = false;
   $('detailFoot').hidden = false;
   $('detailTitle').textContent = detail.listTitle || '明细';
+  $('detailBody').style.minHeight = ''; // 解除高度冻结（openReport 里冻的），列表自己会撑回原高度
   renderDetail();
   paneNav('pane-pop'); // 返回列表：从左侧推回，跟「进详情」方向相反
 }
 
 function renderReport(r) {
-  const list = r.list || [];
+  // 未加新的排在最前：看报告详情最关心的就是「这份报告里哪些我还没记过」。
+  // 稳定排序（Array.sort 在 V8 里是稳定的），组内保持上游原始顺序不打乱。
+  const list = (r.list || []).slice().sort((a, b) => Number(!!b.lifer) - Number(!!a.lifer));
   const span = r.startTime ? `${esc(r.startTime)}${r.endTime ? ' ~ ' + esc(r.endTime.slice(11)) : ''}` : '';
   const loc = [r.province, r.city && r.city !== r.province ? r.city : '', r.district].filter(Boolean).join(' · ');
   const chips = [
@@ -3687,6 +3846,12 @@ function bind() {
       openPhotos(imgBtn.dataset.imgAct, imgBtn.dataset.imgTaxon, imgBtn.dataset.imgName);
       return;
     }
+    // 收集拼图里点鸟名 → 这个鸟种的档案（同一个弹层里换视图，可 ‹ 返回拼图）
+    const tile = e.target.closest('.pz-tile[data-taxon-id]');
+    if (tile && detail.kind === 'puzzle') {
+      openTaxonCard(tile.dataset.taxonId, tile.dataset.taxonName, tile.dataset.taxonCount);
+      return;
+    }
     const del = e.target.closest('.todo-del');
     if (del && detail.metric === 'todo') {
       const id = Number(del.dataset.delId);
@@ -3709,7 +3874,8 @@ function bind() {
     if (tr && tr.dataset.reportId) openReport(tr.dataset.reportId);
   });
   $('btnDetailBack').addEventListener('click', () => {
-    if (detail.pane === 'report') closeReport();
+    if (detail.pane === 'report') closeReport(); // 报告详情：返回 = 回明细列表
+    else if (detail.pane === 'taxon') closeTaxonCard(); // 鸟种档案：返回 = 回拼图
     else closeDetail(); // orders / liferList 这类顶层视图：返回 = 关闭（liferList 会自动回「我的」）
   });
 
@@ -3804,7 +3970,14 @@ function bind() {
       closeMy();
       return;
     }
-    if (detail.open) closeDetail();
+    // 层内视图要先「返回」而不是整个关掉：报告详情 → 回明细列表，鸟种档案 → 回拼图。
+    // （与 __birdHandleBack 同一套路由 —— 早先这里只有 closeDetail()，Esc 会连弹层一起关，
+    //   明细里 Esc 回列表的直觉被它弄丢过，别再改回去。）
+    if (detail.open) {
+      if (detail.pane === 'report') closeReport();
+      else if (detail.pane === 'taxon') closeTaxonCard();
+      else closeDetail();
+    }
   });
   let detailTimer;
   $('dSearch').addEventListener('input', (e) => {

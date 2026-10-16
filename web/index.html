@@ -5,8 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>啾讯 · 观鸟地区稀有鸟种榜</title>
-  <link rel="icon"
-    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐦</text></svg>" />
+  <link rel="icon" href="./favicon.png" type="image/png" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 
@@ -14,7 +13,7 @@
   <header class="topbar">
     <div class="wrap topbar-inner">
       <div class="brand">
-        <span class="brand-mark">🐦</span>
+        <img class="brand-mark" id="brandMark" src="./icon.png" alt="" width="34" height="34" />
         <div>
           <h1>啾讯</h1>
           <p class="brand-sub">观鸟地区稀有鸟种榜 · 按省 / 市 / 区县，把本地记录最少的鸟种排在最前，附国家重点保护等级</p>
@@ -118,6 +117,7 @@
               <option value="national">仅国家重点保护（国一/国二）</option>
               <option value="chinaEndemic">仅中国特有</option>
               <option value="doubt">仅含疑问数据（上游标疑）</option>
+              <option value="nodoubt">不含全疑问（记录全被上游标疑）</option>
             </select>
             <select id="selSort" class="mini-select">
               <option value="record">按稀有度（近两年记录少→多）</option>

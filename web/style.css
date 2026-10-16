@@ -44,7 +44,16 @@ a:hover { text-decoration: underline; }
 }
 .topbar-inner { display: flex; align-items: center; justify-content: space-between; height: 68px; gap: 16px; }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.brand-mark { font-size: 26px; line-height: 1; }
+/* 左上角品牌图标：用 img 而不是 emoji，桌面 / exe / APK 三处都能显示成同一张图
+   （emoji 在 WebView 与部分 Windows 上会 fallback 成黑白方块）。
+   圆角 + 浅描边让它跟后面的文字块有区分；flex-shrink: 0 防止窄屏被压扁。 */
+.brand-mark {
+  width: 34px; height: 34px; flex-shrink: 0;
+  border-radius: 9px;
+  background: #eef3f8;
+  box-shadow: 0 0 0 1px var(--border);
+  object-fit: cover;
+}
 .brand h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: .2px; }
 .brand-sub { margin: 0; font-size: 12px; color: var(--muted); }
 .topbar-meta { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
@@ -834,7 +843,14 @@ html.anim-none .watch-card { animation: none; }
 /* 报告详情视图里要藏掉列表的工具行与翻页条：这两块自带 display:flex，
    会盖过 UA 对 [hidden] 的 display:none，必须显式声明（与 .modal-mask[hidden] 同理） */
 .detail-tools[hidden], .modal-foot[hidden] { display: none; }
-.rp-head { padding: 2px 0 12px; border-bottom: 1px solid var(--border); }
+/* 基本信息（观鸟点 / 时间 / 记录人 / 备注）吸顶：往下滚鸟种清单时它钉在弹层顶部，
+   只有清单在滚 —— 长报告滚到一半仍知道自己在看哪份报告。
+   必须带背景色，否则滚动的清单会透过它露出来。 */
+.rp-head {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface);
+  padding: 2px 0 12px; border-bottom: 1px solid var(--border);
+}
 .rp-point { font-size: 17px; font-weight: 650; line-height: 1.4; }
 .rp-where { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
 .rp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
@@ -992,7 +1008,40 @@ html.anim-none .watch-card { animation: none; }
   background: #eef1f6; color: #9aa3b2; border: 1px solid #e6eaf1;
 }
 .pz-tile.is-got { background: var(--lifer-soft); color: #0a6570; border-color: #b6e0e3; font-weight: 550; }
+/* 可点的格子是 <button>（点开看鸟种档案，见 openTaxonCard）：按钮要自己继承字体、
+   给手型光标，并在触屏上关掉点按高亮块（否则整格会闪一下灰色）。 */
+button.pz-tile { font-family: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button.pz-tile:hover { color: #6b7484; border-color: #ccd4e0; }
+button.pz-tile.is-got:hover { background: #d9f1f2; border-color: #93cfd3; }
+button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 1px; }
 .pz-none { font-size: 12px; color: var(--muted); }
+
+/* ---------------- 鸟种档案（收集拼图里点鸟名） ----------------
+   一份档案就是「名称三件套 + 分类四格 + 三段正文」，宽度收在 720px 内
+   —— 正文是长句子，铺满宽屏一行太长了不好读。 */
+.tx-card { max-width: 720px; }
+.tx-head { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+/* 「我记过 N 次」：拼图格子本来就带记录次数，顺手带过来，不用再查一次 */
+.tx-mine {
+  font-size: 12.5px; color: #0a6570; background: var(--lifer-soft);
+  border: 1px solid #b6e0e3; border-radius: 999px; padding: 4px 11px;
+}
+.tx-mine b { font-weight: 660; }
+.tx-latin { font-style: italic; }
+.tx-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 7px 18px; margin-bottom: 15px;
+}
+.tx-kv { display: flex; gap: 10px; font-size: 13px; }
+.tx-k { flex: none; width: 62px; color: var(--muted); }
+.tx-v { font-weight: 550; word-break: break-all; }
+.tx-block { margin-bottom: 15px; }
+.tx-block-h {
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  margin-bottom: 5px; padding-left: 8px; border-left: 3px solid #14a3b0;
+}
+.tx-p { margin: 0; font-size: 13.5px; line-height: 1.8; white-space: pre-wrap; }
+.tx-foot { font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 10px; }
 
 /* ---------------- 手机端适配（≤ 720px） ----------------
    桌面版大量使用横向排列（顶栏、查询条件、记录检索、榜单工具栏），窄屏下会互相挤压甚至
@@ -1013,7 +1062,7 @@ html.anim-none .watch-card { animation: none; }
     justify-content: space-between; gap: 6px 10px;
   }
   .brand { flex: 0 1 auto; min-width: 0; }
-  .brand-mark { font-size: 22px; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 8px; margin-left:8px }
   /* 标题最多一行：宁可截断，也不要它换行把「我的」顶到下面去 */
   .brand h1 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* 副标题窄屏下要占约 45px 且常驻吸顶，直接省掉（页脚有同源说明） */

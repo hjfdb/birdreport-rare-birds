@@ -247,6 +247,21 @@ export const getReportTaxonImages = (activityId, taxonId) =>
   api('/front/member/image/reportTaxonImage', { report_id: activityId, taxon_id: taxonId });
 
 /**
+ * 鸟种档案（名录里单条的完整资料）。请求体就是 `{ taxon_id: id }`。
+ *
+ * 实测（2026-10-16，淡眉柳莺 taxon_id=4886）返回的 data 字段：
+ *   name / latinname / englishname / pinyin / szm（拼音首字母）
+ *   taxonordername / taxonfamilyname（目 / 科）
+ *   habit（生境习性）/ feature（辨识特征）—— 两段正文，可能为空串
+ *   guidebooksn（《中国鸟类野外手册》编号）/ serial_id / uuid
+ *   version（名录版本，例 CH4）/ taxonorderid / taxonfamilyid / id / enable / spread
+ *
+ * ⚠ 这个接口是**逐个鸟种**查的：拼图里一千多个格子，绝不能渲染时批量拉，
+ *   必须是用户点了某个鸟名才发一次请求，并在服务端按 taxon_id 长期缓存。
+ */
+export const getTaxonContent = (taxonId) => api('/front/taxon/content', { taxon_id: taxonId });
+
+/**
  * 鸟种保护等级（国家重点保护 / IUCN / 中国生物多样性红色名录 / 是否中国特有）
  * @returns {Promise<{taxon_id:number, china_level?:string, iucn?:string, china_iucn?:string, is_china?:string}>}
  */
