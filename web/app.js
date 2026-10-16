@@ -2920,16 +2920,17 @@ function renderVersionRow() {
     state.className = 'ma-state';
   }
 
+  // 这行小字只在**有事要说**的时候才出现（2026-10-16 用户明确要求别显示
+  // 「上次检查 … · 每 6 小时自动查一次」这类例行信息）：
+  // 有新版 / 检查失败 / 版本号不是正式版 —— 其余情况整行隐藏，别占地方。
   const bits = [];
-  if (w.checkedAt) bits.push(`上次检查 ${fmtTime(w.checkedAt)}`);
-  if (w.ttlMs) bits.push(`每 ${Math.round(w.ttlMs / 3600000)} 小时自动查一次`);
   if (w.versionSource === 'fallback') bits.push('源码运行，版本号未知');
   else if (!/^[0-9]/.test(ver)) bits.push('这是没打过 tag 的试跑版本，不参与更新比较');
-  // 状态文字压缩成「发现 vX」之后，把「点哪儿」补在这行说明里（红点 + › 只是视觉提示）
   if (w.hasUpdate) bits.push('点这一行下载并更新');
   if (w.error) bits.push(w.error);
   else if (w.isAndroid && w.asset && w.hasUpdate) bits.push('会下载 APK 并调起系统安装');
   note.textContent = bits.join(' · ');
+  note.hidden = bits.length === 0;
 }
 
 /**

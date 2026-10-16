@@ -295,20 +295,8 @@
         <!-- 弹出动画：类型选择，存本机、「我的」里可改 -->
         <!-- 设置：统一成「左边标签 / 右边控件」的行。
              以前「弹出动画」「稀有监听」「稀有数量」各带一层盒子、中间还插虚线，看着很碎；
-             现在三段合成一块，只靠行间距区分。 -->
+             现在合成一块，只靠行间距区分。（「弹出动画」是纯界面偏好，挪到面板最下面了。） -->
         <section class="my-settings" id="mySettings">
-          <div class="my-row">
-            <label for="selAnim">弹出动画</label>
-            <select id="selAnim" class="mini-select">
-              <option value="zoom">缩放弹出</option>
-              <option value="standard">标准（上浮）</option>
-              <option value="fade">淡入</option>
-              <option value="slide">侧滑</option>
-              <option value="bounce">弹跳</option>
-              <option value="none">关闭动画</option>
-            </select>
-          </div>
-
           <!-- 稀有监听：**一直开着**，条件跟着页面的地区 / 日期 / 检索自动变，所以这里只放
                「是否监听」与「稀有数量」两项（状态存在服务端，换设备 / 刷新都还在）。
                「稀有」= 该地区最近两年记录数 ≤ 这个数量 —— 是个**绝对**条数，
@@ -360,6 +348,19 @@
             <span class="row-chev" aria-hidden="true">›</span>
           </button>
           <p class="mw-hint" id="verNote"></p>
+          <!-- 弹出动画：纯界面偏好（弹层怎么冒出来），跟盯鸟无关，放最下面
+               —— 跟上面的「关于 / 版本」同一段，不再单开一条分隔线。 -->
+          <div class="my-row my-row-anim">
+            <label for="selAnim">弹出动画</label>
+            <select id="selAnim" class="mini-select">
+              <option value="zoom">缩放弹出</option>
+              <option value="standard">标准（上浮）</option>
+              <option value="fade">淡入</option>
+              <option value="slide">侧滑</option>
+              <option value="bounce">弹跳</option>
+              <option value="none">关闭动画</option>
+            </select>
+          </div>
         </section>
       </div>
     </div>

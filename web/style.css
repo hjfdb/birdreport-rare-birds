@@ -414,6 +414,9 @@ input[type="search"] { min-width: 200px; }
   font-size: 12.5px; color: var(--text-2); white-space: nowrap;
 }
 .my-row select { min-width: 0; }
+/* 面板最下面那一行（弹出动画）：它上面可能是**被隐藏**的说明行，
+   所以不能指望 `.my-row + .my-row` 给间距 —— 自己带一个。 */
+.my-row-anim { margin-top: 10px; }
 
 /* 稀有监听那一行的标签带个小图标 */
 .mw-label { display: inline-flex; align-items: center; gap: 6px; }
@@ -437,8 +440,10 @@ input[type="search"] { min-width: 200px; }
 .mw-state { flex: none; white-space: nowrap; font-size: 12.5px; font-weight: 550; color: var(--text-2); }
 .mw-switch input:checked ~ .mw-state { color: var(--green); }
 
-/* 说明文字（跟着所属设置项，逐条成行，不再挤成一整段） */
+/* 说明文字（跟着所属设置项，逐条成行，不再挤成一整段）
+   —— 版本那一行的说明「没事就不出现」，所以要有显式的隐藏规则 */
 .mw-hint { margin: 9px 0 0; font-size: 12px; line-height: 1.75; color: var(--muted); }
+.mw-hint[hidden] { display: none; }
 .mw-hint b { font-weight: 600; color: var(--text-2); }
 .mw-hint .warn { color: #9a6a10; font-weight: 550; }
 .mw-hint .mw-cond, .mw-hint .mw-status { display: block; }
