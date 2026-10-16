@@ -1414,8 +1414,9 @@ function closeTaxonCard() {
   } else {
     detail.pane = 'list';
     $('btnDetailBack').hidden = detail.kind === 'puzzle' || detail.kind === 'liferList' || detail.kind === 'todo';
-    // 拼图不翻页；其余列表（报告明细）要恢复分页条
-    $('detailTools').hidden = false;
+    // 报告明细没有搜索框也没有排序，工具条整条收起（与 openDetail 里的处理一致）；
+    // 拼图不翻页，其余列表要恢复分页条
+    $('detailTools').hidden = detail.kind === 'report';
     $('detailFoot').hidden = detail.kind === 'puzzle';
     $('detailTitle').textContent = detail.listTitle || '明细';
     if (detail.kind === 'puzzle') renderPuzzle();
@@ -2451,7 +2452,13 @@ async function openDetail(metric, opts = {}) {
   if (swapping) paneNav('pane-push'); // 弹层没动、只有内容换了：补一次推入
   $('dPageInfo').textContent = '';
   $('dSearch').value = '';
-  $('dSearch').placeholder = m.kind === 'taxon' ? '筛选中文名 / 学名 / 英文名' : '在本页内筛选观鸟点 / 记录人 / 区县';
+  // 搜索框只留给**收集拼图**（筛科名 / 目名 / 鸟种名，见下面的 puzzle 分支）。
+  // 鸟种明细的「筛选中文名 / 学名 / 英文名」与报告明细的「在本页内筛选观鸟点 / 记录人 / 区县」
+  // 已按用户要求去掉 —— 榜单本身有筛选、明细的量级用不上，留着只会把工具条撑宽。
+  $('dSearch').hidden = m.kind !== 'puzzle';
+  // 报告明细现在一个工具都不剩（没有搜索、也没有排序）：整条工具条收起来，
+  // 不然会留一条只有 padding 的空条。鸟种明细还留着排序下拉。
+  if (m.kind === 'report') $('detailTools').hidden = true;
   $('dSort').value = 'record';
   $('dSort').hidden = m.kind !== 'taxon';
   $('dPrev').disabled = true;
@@ -2488,6 +2495,7 @@ async function openDetail(metric, opts = {}) {
     $('btnDetailBack').hidden = false; // 返回 = 关掉并回到「我的」
     $('detailFoot').hidden = true; // 不翻页
     $('dSort').hidden = true; // 排序固定为「收集比例高的在前」
+    $('dSearch').hidden = false; // 拼图要靠它筛科名 / 鸟种名（其余视图已不用搜索框）
     $('dSearch').placeholder = '筛选科名 / 目名 / 鸟种名';
     loadPuzzle();
     return;
@@ -3800,7 +3808,7 @@ function closeReport() {
   detail.pane = 'list';
   detail.reportId = '';
   $('btnDetailBack').hidden = true;
-  $('detailTools').hidden = false;
+  $('detailTools').hidden = detail.kind === 'report'; // 报告明细没有搜索也没有排序，别露出空工具条
   $('detailFoot').hidden = false;
   $('detailTitle').textContent = detail.listTitle || '明细';
   $('detailBody').style.minHeight = ''; // 解除高度冻结（openReport 里冻的），列表自己会撑回原高度
@@ -3810,9 +3818,21 @@ function closeReport() {
 }
 
 function renderReport(r) {
-  // 未加新的排在最前：看报告详情最关心的就是「这份报告里哪些我还没记过」。
-  // 稳定排序（Array.sort 在 V8 里是稳定的），组内保持上游原始顺序不打乱。
-  const list = (r.list || []).slice().sort((a, b) => Number(!!b.lifer) - Number(!!a.lifer));
+  // 排序（四级，依次比较；同一组内保持上游原始顺序 —— Array.sort 在 V8 里是稳定的）：
+  //   1) **未加新**优先 —— 看报告详情最关心「这份报告里哪些我还没记过」
+  //   2) 同样加新状态下，**有图片的**优先（有照片可对照）
+  //   3) 再**中国特有**优先
+  //   4) 最后按**保护等级**：国家一级 → 二级 → 三有 → 无
+  // 于是最前面是「未加新 + 有图 + 中国特有」那批，其中一级保护的又排在这批最前。
+  const list = (r.list || [])
+    .slice()
+    .sort(
+      (a, b) =>
+        Number(!!b.lifer) - Number(!!a.lifer) ||
+        Number(!!b.imageNum) - Number(!!a.imageNum) ||
+        Number(!!b.chinaEndemic) - Number(!!a.chinaEndemic) ||
+        (LEVEL_RANK[a.chinaLevel] || 9) - (LEVEL_RANK[b.chinaLevel] || 9)
+    );
   // 存一份：从鸟种档案返回时要能直接重画这份报告，不用再请求一次
   lastReport = r;
   const span = r.startTime ? `${esc(r.startTime)}${r.endTime ? ' ~ ' + esc(r.endTime.slice(11)) : ''}` : '';
