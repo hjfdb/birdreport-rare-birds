@@ -812,6 +812,18 @@ html.anim-none .watch-card { animation: none; }
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 8px; }
 .modal-head h3 { margin: 0; font-size: 16px; font-weight: 640; }
+/* 标题 + 「介绍 ›」+ 关闭：head 是 space-between，给标题一个 margin-right:auto 才能
+   让「介绍」紧跟在标题后面（不然它会被推到中间去）。 */
+.modal-head > h3 { margin-right: auto; }
+/* 标题后的「介绍 ›」：跳这个鸟种的档案。压成一行小字链接，不抢标题的视觉重量。 */
+.detail-intro {
+  font: inherit; font-size: 12.5px; color: var(--primary);
+  background: none; border: 0; padding: 3px 7px; border-radius: 6px;
+  cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent;
+}
+.detail-intro:hover { background: #eaf3fd; text-decoration: underline; }
+.detail-intro:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.detail-intro[hidden] { display: none; }
 .modal-close {
   width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: #fff; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; transition: all .15s;
@@ -966,6 +978,15 @@ html.anim-none .watch-card { animation: none; }
 .dtable .d-latin { font-size: 11.5px; color: var(--muted); font-style: italic; }
 .dtable .d-dim { color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
 .dtable .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+/* 行尾的「介绍 ›」：跳这个鸟种的档案。做成按钮（可聚焦、回车即触发），
+   样式上压成一行小字链接，别抢了行里主内容的视觉重量。 */
+.dtable .d-intro {
+  font: inherit; font-size: 12px; color: var(--primary);
+  background: none; border: 0; padding: 2px 5px; border-radius: 5px;
+  cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent;
+}
+.dtable .d-intro:hover { background: #eaf3fd; text-decoration: underline; }
+.dtable .d-intro:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 /* ---------------- 报告明细跳转 ---------------- */
 .dtable tr.is-jump { cursor: pointer; }

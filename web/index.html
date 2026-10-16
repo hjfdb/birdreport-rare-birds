@@ -196,6 +196,10 @@
         <div class="mh-left">
           <button class="modal-back" id="btnDetailBack" hidden aria-label="返回明细列表">‹ 返回</button>
           <h3 id="detailTitle">明细</h3>
+          <!-- 「<鸟种名> · 报告明细」这类弹层里，标题后面跟一个跳鸟种介绍的口子。
+               放在标题上而不是每一行上：这个弹层整个就是关于同一种鸟的，每行都加是重复。
+               由 syncDetailIntro() 决定显示与否（没有鸟种上下文的弹层一律隐藏）。 -->
+          <button class="detail-intro" id="btnDetailIntro" type="button" hidden>介绍 ›</button>
         </div>
         <button class="modal-close" id="detailClose" aria-label="关闭" title="关闭（Esc）">×</button>
       </div>

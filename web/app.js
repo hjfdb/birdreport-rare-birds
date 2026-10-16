@@ -1349,6 +1349,7 @@ async function openTaxonCard(taxonId, name, count) {
   $('detailTools').hidden = true; // 筛选 / 排序是列表的工具，档案里不适用
   $('detailFoot').hidden = true; // 分页同理
   $('detailTitle').textContent = name || '鸟种资料';
+  $('btnDetailIntro').hidden = true; // 已经在看这个鸟种了，标题上的「介绍」收起来
   $('detailSub').innerHTML = '';
   // 冻结窗口高度再换内容：来时的视图内容高、转圈只有一行，不冻结的话窗口会先缩成一条
   // （弹层高度是跟着内容走的），档案回来又突然撑大 —— 用户看到的就是中间「闪一下」。
@@ -1366,6 +1367,29 @@ async function openTaxonCard(taxonId, name, count) {
     if (detail.pane !== 'taxon' || detail.taxonId !== String(id)) return;
     $('detailBody').innerHTML = errNoticeHtml('读取鸟种资料失败：', e.message);
   }
+}
+
+/**
+ * 标题后面那个「介绍 ›」（#btnDetailIntro）：只在**按鸟种收窄的报告明细**里出现，
+ * 也就是标题形如「灰胸竹鸡 · 报告明细」、条件里带了 taxonid 的那一种弹层。
+ *
+ * 入口有三个（榜单卡片 / TODO 条目 / 监听通知），三处的标题都是「<鸟种名> · 报告明细」
+ * 且 where.taxonid 都给了，所以这里从这两处反推鸟种，不用改调用方。
+ * 其余弹层（鸟种明细、普通报告明细、拼图…）要么没有单一的鸟种、要么本来就是看鸟种的，
+ * 一律隐藏 —— 只凭 taxonid 判断是不够的：鸟种明细也会带它。
+ */
+function syncDetailIntro() {
+  const btn = $('btnDetailIntro');
+  if (!btn) return;
+  const title = detail.listTitle || '';
+  const id = String(detail.where.taxonid || '');
+  const on = !!id && detail.pane === 'list' && /·\s*报告明细\s*$/.test(title);
+  btn.hidden = !on;
+  if (!on) return;
+  const name = title.replace(/\s*·\s*报告明细\s*$/, '').trim();
+  btn.dataset.taxonId = id;
+  btn.dataset.taxonName = name || '这个鸟种';
+  btn.title = `看「${name || '这个鸟种'}」的鸟种介绍`;
 }
 
 /** 从档案返回来时的那个视图：拼图 / 报告详情 / 明细列表，按原状态重画 */
@@ -1396,6 +1420,7 @@ function closeTaxonCard() {
     if (detail.kind === 'puzzle') renderPuzzle();
     else renderDetail();
   }
+  syncDetailIntro(); // 回到报告明细时把标题上的「介绍」放回来
 
   // 返回后还原来时的滚动位置 —— 重画 innerHTML 已经把滚动条归零了，
   // 不还原的话，翻到很下面点开一种，返回就得从头再找
@@ -2283,6 +2308,7 @@ async function openDetail(metric, opts = {}) {
   $('detailModal').hidden = false;
   document.body.style.overflow = 'hidden';
   $('detailTitle').textContent = opts.title || m.title;
+  syncDetailIntro(); // 「<鸟种名> · 报告明细」这类弹层：标题后跟一个跳鸟种介绍的口子
   $('btnDetailBack').hidden = true;
   $('detailTools').hidden = false;
   $('detailFoot').hidden = false;
@@ -3499,8 +3525,17 @@ function taxonRow(x, no) {
     <td class="ta-r num" data-label="近两年">${hist}</td>
     <td class="ta-r num${x.doubt ? ' is-doubt' : ''}">${doubt}</td>
     <td><div class="badges">${levelBadge(x)}${x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : ''}${iucnBadge(x.iucn)}</div></td>
+    ${x.taxonId ? `<td class="ta-r" data-label="鸟种">${introBtn(x.taxonId, x.name)}</td>` : '<td></td>'}
   </tr>`;
 }
+
+/**
+ * 「看这个鸟种的介绍」的跳转按钮（鸟种明细 / 按鸟种收窄的报告明细里都用它）。
+ * 用 <button>：它本身就是可聚焦、可回车 / 空格触发的，不用另外补键盘逻辑。
+ */
+const introBtn = (taxonId, name, label = '介绍 ›') =>
+  `<button class="d-intro" type="button" data-taxon-id="${esc(taxonId)}" data-taxon-name="${esc(name)}"` +
+  ` title="看「${esc(name)}」的鸟种介绍">${esc(label)}</button>`;
 
 function reportRow(x, no, compact = false) {
   const span = x.startTime && x.endTime ? `${x.startTime.slice(5, 16)} ~ ${x.endTime.slice(11, 16)}` : '';
@@ -3562,7 +3597,7 @@ function renderDetail() {
     $('detailBody').innerHTML = `<div class="notice">${detail.q ? '本页没有匹配的记录。' : '该条件下没有明细数据。'}</div>`;
   } else if (detail.kind === 'taxon') {
     $('detailBody').innerHTML = `<table class="dtable">
-      <thead><tr><th class="ta-c">#</th><th>中文名 / 学名</th><th>目 · 科</th><th class="ta-r">本时段记录</th><th class="ta-r">近两年记录</th><th class="ta-r">疑问数据</th><th>保护等级</th></tr></thead>
+      <thead><tr><th class="ta-c">#</th><th>中文名 / 学名</th><th>目 · 科</th><th class="ta-r">本时段记录</th><th class="ta-r">近两年记录</th><th class="ta-r">疑问数据</th><th>保护等级</th><th class="ta-r">介绍</th></tr></thead>
       <tbody>${rows.map((x, i) => taxonRow(x, offset + i + 1)).join('')}</tbody>
     </table>`;
   } else {
@@ -3608,6 +3643,7 @@ async function openReport(reportId) {
   $('detailTools').hidden = true; // 筛选 / 排序是列表的工具，详情里不适用
   $('detailFoot').hidden = true; // 分页同理
   $('detailTitle').textContent = '报告详情';
+  $('btnDetailIntro').hidden = true; // 进了某一份报告：标题上的「介绍」收起来（要点鸟种直接点行）
   $('detailSub').innerHTML = '';
   const body = $('detailBody');
   // 冻结窗口高度再换内容（同 openTaxonCard）：列表很高、转圈只有一行，
@@ -3638,6 +3674,7 @@ function closeReport() {
   $('detailTitle').textContent = detail.listTitle || '明细';
   $('detailBody').style.minHeight = ''; // 解除高度冻结（openReport 里冻的），列表自己会撑回原高度
   renderDetail();
+  syncDetailIntro(); // 回到报告明细：标题上的「介绍」放回来
   paneNav('pane-pop'); // 返回列表：从左侧推回，跟「进详情」方向相反
 }
 
@@ -3874,6 +3911,14 @@ function bind() {
       openPhotos(imgBtn.dataset.imgAct, imgBtn.dataset.imgTaxon, imgBtn.dataset.imgName);
       return;
     }
+    // 鸟种明细表行尾的「介绍 ›」→ 这个鸟种的档案。
+    // （只有**鸟种明细**用行内按钮：它每一行就是一个鸟种，入口只能落在行上。
+    //   按鸟种收窄的「… · 报告明细」整个弹层都是同一种鸟，入口在标题上，见 syncDetailIntro。）
+    const intro = e.target.closest('.d-intro[data-taxon-id]');
+    if (intro) {
+      openTaxonCard(intro.dataset.taxonId, intro.dataset.taxonName);
+      return;
+    }
     // 收集拼图里点鸟名 → 这个鸟种的档案（同一个弹层里换视图，可 ‹ 返回拼图）
     const tile = e.target.closest('.pz-tile[data-taxon-id]');
     if (tile && detail.kind === 'puzzle') {
@@ -3909,6 +3954,10 @@ function bind() {
     }
     const tr = e.target.closest('tr[data-report-id]');
     if (tr && tr.dataset.reportId) openReport(tr.dataset.reportId);
+  });
+  // 标题后面的「介绍 ›」（只在「<鸟种名> · 报告明细」里显示，见 syncDetailIntro）
+  $('btnDetailIntro').addEventListener('click', () => {
+    openTaxonCard($('btnDetailIntro').dataset.taxonId, $('btnDetailIntro').dataset.taxonName);
   });
   $('btnDetailBack').addEventListener('click', () => {
     if (detail.pane === 'report') closeReport(); // 报告详情：返回 = 回明细列表
