@@ -2892,7 +2892,10 @@ function renderVersionRow() {
     return;
   }
 
-  num.textContent = 'v' + w.current;
+  // 版本号未必是数字：没打过 tag 的本地构建 / 手动试跑的包会是 'dev'，
+  // 那种情况别硬拼一个 'v' 上去（会显示成「vdev」）
+  const ver = String(w.current || '');
+  num.textContent = /^[0-9]/.test(ver) ? 'v' + ver : ver || '—';
   if (w.hasUpdate) {
     dot.hidden = false;
     state.textContent = `发现 v${w.latest} · 点这里更新`;
@@ -2915,6 +2918,7 @@ function renderVersionRow() {
   if (w.checkedAt) bits.push(`上次检查 ${fmtTime(w.checkedAt)}`);
   if (w.ttlMs) bits.push(`每 ${Math.round(w.ttlMs / 3600000)} 小时自动查一次`);
   if (w.versionSource === 'fallback') bits.push('源码运行，版本号未知');
+  else if (!/^[0-9]/.test(ver)) bits.push('这是没打过 tag 的试跑版本，不参与更新比较');
   if (w.error) bits.push(w.error);
   else if (w.isAndroid && w.asset && w.hasUpdate) bits.push('将下载 APK 并调起系统安装');
   note.textContent = bits.join(' · ');

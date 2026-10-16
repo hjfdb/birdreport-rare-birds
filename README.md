@@ -354,9 +354,14 @@ URL 规则是 `/home/record/page.html?param=<Base64(JSON({reportId,ts}))>&sign=<
 推一个 tag 就会自动构建 4 个产物并发布到 Releases，不需要手动跑任何构建命令：
 
 ```bash
-git tag -a v0.0.3 -m "v0.0.3"     # -a 是附注标签，带作者 / 日期 / 说明
-git push origin v0.0.3            # ← 必须单独推 tag，git push 不会顺带推它
+# 先把要发布的代码提交并推上去（tag 指向的是那一个 commit）
+git pull
+git tag v0.0.18                      # 轻量标签：本仓库现有的 tag 都是这种
+# 或 git tag -a v0.0.18 -m "v0.0.18" # 附注标签：带作者/日期/说明，更正式
+git push origin v0.0.18              # ← 必须单独推 tag，git push 不会顺带推它
 ```
+
+> 版本号**不用改任何文件** —— 就是这里的 tag，下面「版本号从哪来」有明细。
 
 约 3–5 分钟后自动完成。桌面三个平台**并行**构建（`windows-latest` / `macos-latest` arm64 /
 `macos-15-intel` x64），每个平台都会：构建 → **冒烟验证**（解压发布包、真起一次那个二进制打
@@ -379,6 +384,44 @@ birdreport-rare-birds-<tag>-android-arm64.apk
 | --- | --- |
 | `v1.0.0`、`v0.0.3` | 正式 Release |
 | `v0.0.3-beta`、`v1.0.0-rc1` | **Pre-release**（tag 里带 `-` 即自动标记为预发布） |
+
+**版本号从哪来（结论：不用手改任何文件）**
+
+版本号只有一个来源 —— **你打的那个 tag**。工作流从它推导出三处，全程不用改代码：
+
+| 用在哪 | 怎么来 |
+| --- | --- |
+| exe / APK 里「我的」面板显示的版本 | 桌面 `BIRD_VERSION`、安卓 `BIRD_VERSION_NAME` = tag 去掉 `v`；打包时写进 `web/version.json` 一起进包（见 `server/version.mjs`） |
+| 二进制与附件文件名 | 直接用 tag 原文：`观鸟地区稀有榜-v0.0.17-win-x64.exe`、`birdreport-rare-birds-v0.0.17-…zip/apk` |
+| Android 的 `versionCode` | `github.run_number`，**自动单调递增**（Android 判断「能否覆盖安装」就靠它） |
+
+所以 `git tag v0.0.18 && git push origin v0.0.18` 就够了。下面这些地方**只有特殊情况才碰**：
+
+- `package.json` 的 `version`（现在是 `1.0.0`）：与发布**无关**，纯占位，不用跟着改。
+- `android/app/build.gradle` 里的 `appVersionName`（默认 `1.0.0`）/ `appVersionCode`（默认 `1`）：
+  只在**既没有 tag、也没给命令行参数**时兜底 —— 也就是 Actions 页面点「Run workflow」那种手动试跑。
+- 本地手动构建（`node build-exe.mjs` / `node android/build-apk.mjs`）：版本号按
+  `BIRD_VERSION` → 最近的 git tag → `dev` 依次取；想指定就 `BIRD_VERSION=1.2.3 node build-exe.mjs`。
+  两个构建脚本都会把同一个值同时写进 `web/version.json` 和 APK 的 `versionName`，
+  免得「我的」里显示的版本与系统「应用信息」对不上。
+
+⚠ 两件不能做错的事：
+
+- **版本号只能往前走**（App 里的更新判断就是比大小）：发过 `v0.0.18` 之后就不要再发 `v0.0.17` 的包，
+  否则用户那边会一直显示「有更新」。安卓的 `versionCode` 由 run number 保证递增，
+  但 `versionName` 变小同样会让更新提示卡住。
+- **tag 指向的是那一个 commit**：打完 tag 之后继续改的代码属于下一个版本，要让版本号跟着涨。
+
+**发完怎么核对**（三条都能一眼看出跑的是哪一版）：
+
+```bash
+gh release view v0.0.18          # 四个附件齐不齐、是不是正式版
+gh run list --workflow=release.yml --limit 3   # 工作流是否 success
+```
+
+- 解压 exe 跑起来，看 `http://127.0.0.1:8787/api/health` 的 `version` 与 `versionSource`
+  （`baked` = 用的是打包时写进去的版本号）。
+- 手机上打开 App →「我的」→ 最下面那行版本号；有更新时那里会亮红点。
 
 **几个注意点**
 
