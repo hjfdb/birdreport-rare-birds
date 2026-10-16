@@ -1320,11 +1320,16 @@ function renderPuzzle() {
 let taxonCardCtx = { count: 0 };
 
 /**
- * 进档案前拼图的滚动位置：返回时要回到原处。
- * 没有它的话返回会整页滚回最上面 —— 因为 renderPuzzle() 是重画整个 #detailBody 的
- * innerHTML，滚动条跟着新 DOM 归零（用户报告：翻到下面点开一种，返回又回到顶部）。
+ * 进档案前所在视图的滚动位置：返回时要回到原处。
+ * 没有它的话返回会整页滚回最上面 —— 因为重画视图是换整个 #detailBody 的 innerHTML，
+ * 滚动条跟着新 DOM 归零（用户报告：翻到下面点开一种，返回又回到顶部）。
  */
-let puzzleScrollPos = 0;
+let paneScrollPos = 0;
+
+/** 档案是从哪个视图点进来的（'puzzle' / 'report' / 'list'）：返回时要回到那儿 */
+let taxonFromPane = 'list';
+/** 最近一次渲染的报告详情数据：从档案返回报告时直接重画，不用再请求一次 */
+let lastReport = null;
 
 /**
  * 点鸟名 → 打开档案。
@@ -1334,17 +1339,18 @@ let puzzleScrollPos = 0;
 async function openTaxonCard(taxonId, name, count) {
   const id = Number(taxonId);
   if (!Number.isFinite(id) || id <= 0) return;
+  const body = $('detailBody');
+  taxonFromPane = detail.pane; // 从拼图点的是 'puzzle'，从报告详情点的是 'report'
+  paneScrollPos = body.scrollTop; // 记下当前位置，返回时还原
   detail.pane = 'taxon';
   detail.taxonId = String(id);
   taxonCardCtx = { count: Number(count) || 0 };
-  puzzleScrollPos = $('detailBody').scrollTop; // 记下拼图当前位置，返回时还原
   $('btnDetailBack').hidden = false;
   $('detailTools').hidden = true; // 筛选 / 排序是列表的工具，档案里不适用
   $('detailFoot').hidden = true; // 分页同理
   $('detailTitle').textContent = name || '鸟种资料';
   $('detailSub').innerHTML = '';
-  const body = $('detailBody');
-  // 冻结窗口高度再换内容：拼图内容高、转圈只有一行，不冻结的话窗口会先缩成一条
+  // 冻结窗口高度再换内容：来时的视图内容高、转圈只有一行，不冻结的话窗口会先缩成一条
   // （弹层高度是跟着内容走的），档案回来又突然撑大 —— 用户看到的就是中间「闪一下」。
   // 冻结到档案关闭（closeTaxonCard）才解除：档案比冻结高度矮时底部留白，也比跳变小好。
   body.style.minHeight = body.clientHeight + 'px';
@@ -1362,29 +1368,43 @@ async function openTaxonCard(taxonId, name, count) {
   }
 }
 
-/** 从档案返回拼图（或返回来时的那个列表）：按原状态重画 */
+/** 从档案返回来时的那个视图：拼图 / 报告详情 / 明细列表，按原状态重画 */
 function closeTaxonCard() {
   if (detail.pane !== 'taxon') return;
   const backToId = detail.taxonId;
-  detail.pane = 'list';
-  detail.taxonId = '';
-  taxonCardCtx = { count: 0 };
-  $('btnDetailBack').hidden = detail.kind === 'puzzle' || detail.kind === 'liferList' || detail.kind === 'todo';
-  // 拼图不翻页；其余列表（报告明细）要恢复分页条
-  $('detailTools').hidden = false;
-  $('detailFoot').hidden = detail.kind === 'puzzle';
-  $('detailTitle').textContent = detail.listTitle || '明细';
-  if (detail.kind === 'puzzle') renderPuzzle();
-  else renderDetail();
-  // 返回后还原拼图原来的滚动位置 —— 重画 innerHTML 已经把滚动条归零了，
-  // 不还原的话，翻到很下面点开一种，返回就得从头再找
+  const from = taxonFromPane;
   const body = $('detailBody');
-  body.style.minHeight = ''; // 解除高度冻结（openTaxonCard 里冻的）：拼图自己会撑回原来的高度
-  body.scrollTop = puzzleScrollPos;
-  // 键盘用户：焦点落回刚才点的那一格（按钮被重画过，按 id 找回来）；
+  taxonFromPane = 'list';
+  taxonCardCtx = { count: 0 };
+  detail.taxonId = ''; // 先清掉：迟到的档案响应靠它判断「已经不是这个种了」
+
+  if (from === 'report' && lastReport) {
+    // 报告详情 → 档案 → 回到**报告详情**（不是回报告明细列表）：数据还在，直接重画
+    detail.pane = 'report';
+    $('btnDetailBack').hidden = false;
+    $('detailTools').hidden = true;
+    $('detailFoot').hidden = true;
+    $('detailTitle').textContent = '报告详情';
+    renderReport(lastReport);
+  } else {
+    detail.pane = 'list';
+    $('btnDetailBack').hidden = detail.kind === 'puzzle' || detail.kind === 'liferList' || detail.kind === 'todo';
+    // 拼图不翻页；其余列表（报告明细）要恢复分页条
+    $('detailTools').hidden = false;
+    $('detailFoot').hidden = detail.kind === 'puzzle';
+    $('detailTitle').textContent = detail.listTitle || '明细';
+    if (detail.kind === 'puzzle') renderPuzzle();
+    else renderDetail();
+  }
+
+  // 返回后还原来时的滚动位置 —— 重画 innerHTML 已经把滚动条归零了，
+  // 不还原的话，翻到很下面点开一种，返回就得从头再找
+  body.style.minHeight = ''; // 解除高度冻结（openTaxonCard 里冻的）：回来时视图自己会撑回原高度
+  body.scrollTop = paneScrollPos;
+  // 键盘用户：焦点落回刚才点的那一格（DOM 被重画过，按 id 找回来）；
   // preventScroll 防止聚焦时浏览器再滚动一次、把刚还原的位置顶歪
   if (backToId) {
-    const t = body.querySelector(`.pz-tile[data-taxon-id="${backToId}"]`);
+    const t = body.querySelector(`.pz-tile[data-taxon-id="${backToId}"], .rp-item[data-taxon-id="${backToId}"]`);
     if (t) t.focus({ preventScroll: true });
   }
   paneNav('pane-pop'); // 返回：从左侧推回，跟「进档案」方向相反
@@ -3625,6 +3645,8 @@ function renderReport(r) {
   // 未加新的排在最前：看报告详情最关心的就是「这份报告里哪些我还没记过」。
   // 稳定排序（Array.sort 在 V8 里是稳定的），组内保持上游原始顺序不打乱。
   const list = (r.list || []).slice().sort((a, b) => Number(!!b.lifer) - Number(!!a.lifer));
+  // 存一份：从鸟种档案返回时要能直接重画这份报告，不用再请求一次
+  lastReport = r;
   const span = r.startTime ? `${esc(r.startTime)}${r.endTime ? ' ~ ' + esc(r.endTime.slice(11)) : ''}` : '';
   const loc = [r.province, r.city && r.city !== r.province ? r.city : '', r.district].filter(Boolean).join(' · ');
   const chips = [
@@ -3650,7 +3672,13 @@ function renderReport(r) {
           '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="9" cy="9" r="2"></circle><path d="M21 15l-5-5-9 9"></path></svg>' +
           `图片 ${x.imageNum}</button>`
         : '';
-      return `<div class="rp-item">
+      // 整行可点（点鸟种看它的档案）：必须有 taxonId 才给 —— 查不到档案的别做可点暗示
+      const canOpen = !!x.taxonId;
+      const attrs = canOpen
+        ? ` class="rp-item is-link" role="button" tabindex="0" title="点开看这个鸟种的资料"` +
+          ` data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}"`
+        : ' class="rp-item"';
+      return `<div${attrs}>
         <div class="rp-main">
           <div class="rp-name-row"><span class="${nameCls}">${esc(x.name)}</span>${liferBadge}${doubtBadge}${badges}</div>
           <div class="rp-latin">${esc(x.latin || '')}</div>
@@ -3850,6 +3878,15 @@ function bind() {
     const tile = e.target.closest('.pz-tile[data-taxon-id]');
     if (tile && detail.kind === 'puzzle') {
       openTaxonCard(tile.dataset.taxonId, tile.dataset.taxonName, tile.dataset.taxonCount);
+      return;
+    }
+    // 报告详情里点鸟种 → 同一个鸟种档案；返回时回**报告详情**（不是回报告明细列表）。
+    // 行里的「图片 N」按钮自己有作用，点在它上面不算点鸟种。
+    const sp = e.target.closest('.rp-item.is-link[data-taxon-id]');
+    if (sp && detail.pane === 'report') {
+      if (e.target.closest('.rp-img-btn')) return;
+      // 不传记录次数：报告里的「N 只」是这份报告的数量，不是「我记过 N 次」
+      openTaxonCard(sp.dataset.taxonId, sp.dataset.taxonName);
       return;
     }
     const del = e.target.closest('.todo-del');
@@ -4143,6 +4180,14 @@ function bind() {
       return;
     }
     openMyPuzzle();
+  });
+  // 报告详情里用键盘点鸟种（行是 div+role=button，回车 / 空格不会自己触发 click）
+  $('detailBody').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const sp = e.target.closest && e.target.closest('.rp-item.is-link[data-taxon-id]');
+    if (!sp || detail.pane !== 'report') return;
+    e.preventDefault(); // 空格会滚页，必须拦掉
+    openTaxonCard(sp.dataset.taxonId, sp.dataset.taxonName);
   });
   // 拼图里的两个勾选项：切换后只重画列表，不重新请求
   $('detailBody').addEventListener('change', (e) => {

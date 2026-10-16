@@ -863,6 +863,11 @@ html.anim-none .watch-card { animation: none; }
 .rp-note { margin-top: 8px; font-size: 12.5px; color: var(--text-2); line-height: 1.7; }
 .rp-list { padding-bottom: 6px; }
 .rp-item { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+/* 报告详情里的鸟种行可点（点开这个鸟种的档案）。用 role="button" 的 div 而不是
+   <button>：行里还嵌着「图片 N」按钮，按钮套按钮在语义上是错的。 */
+.rp-item.is-link { cursor: pointer; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+.rp-item.is-link:hover { background: var(--surface-2); }
+.rp-item.is-link:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
 .rp-main { flex: 1; min-width: 0; }
 .rp-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rp-name { font-size: 14px; font-weight: 580; }
