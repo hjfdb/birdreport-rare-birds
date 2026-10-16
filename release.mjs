@@ -20,10 +20,13 @@
 import { spawnSync } from 'node:child_process';
 import { isNewer, normalizeVersion } from './server/version.mjs';
 
-/** 报错时补一句最常见的网络原因（本机 Clash 没开时 git 连不上 GitHub） */
+/** 报错时补一句最常见的网络原因（本机 Clash 没开时 git 连不上 GitHub；CI 上则是偶发） */
 const PROXY_HINT =
-  '提示：若报 “schannel: failed to receive handshake”，是本机 git 走的代理没在跑\n' +
-  '      （~/.gitconfig 里的 http.proxy = http://127.0.0.1:7890，即 Clash），打开它即可。';
+  process.platform === 'win32'
+    ? '提示：若报 “schannel: failed to receive handshake”，是本机 git 走的代理没在跑\n' +
+      '      （~/.gitconfig 里的 http.proxy = http://127.0.0.1:7890，即 Clash），打开它即可。'
+    : '提示：这是访问 GitHub 时的问题。重推一次同一个 tag 就能重跑本工作流：\n' +
+      '      git push origin --force <tag>（Release 已存在时只会覆盖附件，不会失败）';
 
 const c = {
   red: (s) => `\x1b[31m${s}\x1b[0m`,
