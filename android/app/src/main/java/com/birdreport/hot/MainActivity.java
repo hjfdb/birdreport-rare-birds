@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -177,6 +178,43 @@ public class MainActivity extends Activity {
         }
         openWatchPending = false;
         web.evaluateJavascript("window.__birdOpenWatch && window.__birdOpenWatch();", null);
+    }
+
+    /**
+     * 把下载好的新版 APK 交给系统安装器（网页端点「下载并更新」后由 JS 桥调过来）。
+     *
+     * 传的是**内容 URI**（{@link ApkFileProvider}）而不是文件路径：Android 7 起把 file://
+     * 交给别的应用会直接抛 FileUriExposedException。路径必须是应用私有目录里的（provider 那边
+     * 还会再校验一遍越界），并带上 FLAG_GRANT_READ_URI_PERMISSION 让安装器能读。
+     *
+     * Android 8+ 还需要用户允许「安装未知应用」—— 没允许时系统会自己弹对话框并给一个
+     * 去设置的入口，所以这里不做拦截，交给系统。
+     */
+    public void installApk(String absPath) {
+        try {
+            File base = getFilesDir();
+            File f = new File(absPath == null ? "" : absPath);
+            if (!f.isFile()) {
+                Log.w(TAG, "安装包不存在：" + absPath);
+                return;
+            }
+            String root = base.getCanonicalPath();
+            String target = f.getCanonicalPath();
+            if (!target.startsWith(root + File.separator)) {
+                Log.w(TAG, "安装包不在应用私有目录里，拒绝安装：" + target);
+                return;
+            }
+            // 与 ApkFileProvider 的 URI 规则对应：authority + 相对 filesDir 的路径
+            String rel = target.substring(root.length()); // 以 / 开头
+            Intent it = new Intent(Intent.ACTION_VIEW);
+            it.setDataAndType(Uri.parse("content://" + ApkFileProvider.AUTHORITY + rel),
+                    "application/vnd.android.package-archive");
+            it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            Log.i(TAG, "调起安装器：" + target);
+            startActivity(it);
+        } catch (Throwable t) {
+            Log.e(TAG, "调起安装器失败", t);
+        }
     }
 
     /**

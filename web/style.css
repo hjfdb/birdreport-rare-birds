@@ -427,6 +427,52 @@ input[type="search"] { min-width: 200px; }
   .mw-track, .mw-knob { transition: none; }
 }
 
+/* ---------------- 版本与更新：「我的」里那一行 + 更新弹层 ----------------
+   刻意**只在「我的」里出现**：主界面不做任何更新提示，只有这一行会亮红点。 */
+.my-about { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.ma-ver {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; border-radius: 9px; cursor: pointer; text-align: left;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font-family: inherit; color: var(--text); transition: border-color .15s, background .15s;
+}
+.ma-ver:hover { border-color: var(--primary); background: #f2f7fd; }
+.ma-label { font-size: 12.5px; color: var(--text-2); flex: none; }
+.ma-num { font-size: 13.5px; font-weight: 650; letter-spacing: .2px; flex: none; }
+/* 红点：有新版才显示（hidden 由 JS 控制） */
+.ma-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+  box-shadow: 0 0 0 3px rgba(217, 43, 43, .16);
+}
+.ma-state { font-size: 12px; color: var(--muted); flex: 1; min-width: 0; }
+.ma-state.is-new { color: var(--red); font-weight: 600; }
+.ma-state.is-warn { color: #9a6a10; }
+.ma-note { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.ma-note b { font-weight: 600; color: var(--text-2); }
+
+/* 更新弹层的内容块 */
+.up-vers { font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
+.up-vers b { font-size: 14px; color: var(--text); }
+.up-vers .up-to { color: var(--red); font-weight: 650; }
+.up-notes {
+  margin: 0 0 10px; padding: 9px 11px; border-radius: 9px; background: var(--surface-2);
+  border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2);
+  line-height: 1.75; white-space: pre-wrap; word-break: break-word;
+  max-height: 34vh; overflow: auto;
+}
+.up-row { font-size: 12.5px; color: var(--text-2); line-height: 1.9; }
+.up-row .up-k { color: var(--muted); }
+.up-bar { margin: 10px 0 4px; height: 8px; border-radius: 5px; background: var(--border); overflow: hidden; }
+.up-bar-in { height: 100%; width: 0; background: var(--primary); transition: width .2s; }
+.up-pct { font-size: 12.5px; color: var(--text-2); }
+.up-tip { margin: 10px 0 0; font-size: 12.5px; line-height: 1.75; }
+.up-tip.ok { color: #1f7a4d; }
+.up-tip.warn { color: #9a6a10; }
+.up-tip code {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px;
+  padding: 1px 5px; font-size: 11.5px; word-break: break-all;
+}
+
 /* ---------------- 稀有监听：右下角浮标 + 提示卡 ----------------
    z-index 55 —— 刻意压在弹层遮罩（60）之下：开着明细 / 我的等弹层时它自动被盖住。 */
 .watch-dock {

@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { detectVersion, writeBakedVersion } from '../server/version.mjs';
 
 const ANDROID_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(ANDROID_DIR, '..');
@@ -186,6 +187,20 @@ function ensureLocalProperties() {
   log(`已写入 local.properties（sdk.dir=${sdk}）`);
 }
 
+/**
+ * 把版本号写进 `web/version.json`。
+ *
+ * Gradle 的 nodejsProject 任务是**整目录**拷 `web/` 进 APK 的 assets，所以这个文件会跟着进去，
+ * 手机上的 Node 进程就能用 `readWebFile('version.json')` 读出「我是哪一版」——
+ * 「我的」面板里的版本号与更新检查都靠它（见 server/version.mjs）。
+ * 必须**在 Gradle 之前**写，否则拷进去的还是上一版。
+ */
+function stampVersion(version) {
+  const web = path.join(ROOT, 'web');
+  const { file, version: v } = writeBakedVersion(web, { version, platform: 'android-arm64' });
+  log(`已写入版本戳 ${path.relative(ROOT, file)} → ${v}`);
+}
+
 /* ------------------------------------------------------------------ *
  * ③ 构建
  * ------------------------------------------------------------------ */
@@ -193,11 +208,18 @@ function ensureLocalProperties() {
 async function main() {
   console.log(`\n构建 Android APK（${DEBUG ? 'debug' : 'release'}）\n`);
 
+  // 版本号：CI 用 tag（BIRD_VERSION_NAME），本地构建自动跟着最近的 git tag
+  // （detectVersion 的优先级见 server/version.mjs）。
+  // ⚠ 必须**同一个值**同时给 Gradle 的 versionName 和 assets 里的 web/version.json ——
+  //   否则「我的」里显示的版本会和系统「应用信息」里的对不上（本地构建默认 1.0.0 就是这种）
+  const versionName = process.env.BIRD_VERSION_NAME || detectVersion(ROOT);
+
   const jdk = await findJdk();
   log(`使用 JDK ${jdk.major}：${jdk.home}`);
 
   await ensureNodeRuntime();
   ensureLocalProperties();
+  stampVersion(versionName);
 
   const javaExe = path.join(jdk.home, 'bin', isWin ? 'java.exe' : 'java');
   // 直接用 java 跑 wrapper jar，而不是 gradlew / gradlew.bat：
@@ -215,8 +237,8 @@ async function main() {
   // java.home 只走命令行，不写进 gradle.properties —— 那个文件是进 git 的，
   // 写死绝对路径会把 CI（Linux）与别人的机器一起弄坏。
   args.push(`-Dorg.gradle.java.home=${jdk.home}`);
-  // 版本号可由环境变量覆盖（CI 从 tag / run number 推导，让 APK 里的版本与发布名对得上）
-  if (process.env.BIRD_VERSION_NAME) args.push(`-PbirdVersionName=${process.env.BIRD_VERSION_NAME}`);
+  // 版本号（上面的 versionName：CI 是 tag，本地跟着 git tag），让 APK 里的版本与发布名对得上
+  args.push(`-PbirdVersionName=${versionName}`);
   if (process.env.BIRD_VERSION_CODE) args.push(`-PbirdVersionCode=${process.env.BIRD_VERSION_CODE}`);
 
   console.log('');

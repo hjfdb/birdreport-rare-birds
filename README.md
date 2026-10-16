@@ -137,11 +137,14 @@ cd android
 ./gradlew :app:copyApkToDist      # 打 release 并把产物改名放进 ../dist
 ```
 
-**关于签名**：签名文件（`android/keystore.properties` 连同 `android/keystore/birdreport.jks`）
-**随私有库提交**，本地构建与 CI 共用同一把钥匙 —— 这样 CI 出的 APK 就是正式签名，
-手机上不用「先卸载 debug 版再装」。
-没有这份文件时构建不会失败，而是**退回 debug 密钥签名** —— 产物照样能装，只是不能上架、
-且以后换成正式密钥时必须先卸载再装。要换钥匙就在 `android/keystore.properties` 里写：
+**关于签名**：签名密钥**绝不进版本库**（`.gitignore` 里明确挡掉 `android/keystore*`）。
+它有两个来源，Gradle 按下面的顺序取：
+
+1. **环境变量**（CI 走这条）：`BIRD_KEYSTORE_FILE` / `BIRD_KEYSTORE_PASSWORD` / `BIRD_KEY_ALIAS` /
+   `BIRD_KEY_PASSWORD` —— 由 workflow 从 4 个 Secrets
+   （`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`）
+   解码到 `$RUNNER_TEMP` 后注入，不落盘到工作区。
+2. **本机文件**（本地发布走这条）：`android/keystore.properties`：
 
 ```properties
 storeFile=keystore/birdreport.jks
@@ -150,12 +153,15 @@ keyAlias=birdreport
 keyPassword=…
 ```
 
-CI 上也可以用 4 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
-`ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`）**覆盖**仓库里的钥匙——配了 Secrets 就优先用 Secrets；
-都不配就走仓库里的 `android/keystore.properties`（再没有才退回 debug 密钥）。
+两处都没有时构建**不会失败**，而是退回 debug 密钥签名 —— 产物照样能装，只是不能上架、
+且以后换成正式密钥时必须先卸载重装。正因如此，**打 tag 发布时缺 Secrets 会直接让 CI 失败**
+（见 `.github/workflows/release.yml` 的「准备签名密钥」），避免把 debug 签名的包发出去。
 
-> ⚠ **上面「随库提交」的前提是仓库为私有**。一旦打算转公开：先从全部分支与历史里移除这两个文件、
-> 换一把新钥匙（已装机用户需卸载重装），再公开。
+> ⚠ 2026-10-16 的教训：仓库从 private 转 public 时，发现这把钥匙**一直是随库提交的**
+> （`.gitignore` 里那句「随私有库提交」），等于把签名私钥公开了 —— 拿到它就能签一个同包名的
+> 恶意 APK，系统会因为「签名相同」当成正常升级装上去。当天已**整体更换密钥**并改为只放在
+> Secrets 里；用旧钥匙签过的包（≤ v0.0.16）在手机上要**先卸载**才能装上 v0.0.17 及以后。
+> 历史提交里的旧钥匙已经作废，但**不要**再把任何密钥文件提交回来。
 
 ## 功能
 
@@ -190,6 +196,13 @@ CI 上也可以用 4 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE
   > ⚠ 数量是**绝对条数**，在大范围下很难命中：实测近两年记录数的下界，北京市 **95** 条、北京朝阳区 **64** 条、全国 **286** 条。
   > 所以默认的 ≤3 条只对区县一级有意义；「我的」面板里会把「本时段最稀有的也有 N 条」摊开显示，
   > 并在这一档一种也命中不了时直接建议改到多少条。
+- **版本与更新**：版本号在「我的」面板最下面 —— **主界面不做任何更新提示**。
+  服务端定期（默认 6 小时一次）去 GitHub Releases 查最新版本，有新版时版本号旁边亮**红点**、
+  右边写「发现 vX · 点这里更新」；点它弹「发现新版本」（当前 → 最新 + 发布说明 + 安装包大小），
+  确认后**应用内下载**：Android 下完直接调系统安装器（`REQUEST_INSTALL_PACKAGES` + 自建
+  ContentProvider 给安装器一个只读内容 URI），Windows / macOS 下完 zip 并解压，
+  帮你打开文件夹让你替换运行中的程序（运行中的 exe 在 Windows 上锁着自己，不可能自我覆盖）。
+  版本号由打包脚本写进 `web/version.json` 一起打进 exe / APK；源码方式直接跟着最近的 git tag。
 - 筛选：全部 / 仅受保护 / 仅国家重点保护 / 仅中国特有，以及按鸟种名、学名搜索
 - 图表：逐月鸟种数、逐月报告数、省内下一级（地市或区县）鸟种数排行（三块默认隐藏，见下）
 - 支持 URL 直达：`?province=浙江省&city=杭州市&district=西湖区&start=2026-01-01&end=2026-10-10`
@@ -223,6 +236,11 @@ CI 上也可以用 4 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE
 | POST | `/api/watch?enabled=1&…` | 打开监听（或改完数量重开，**重建基线**、历史记录与「已提醒」表保留）；`enabled=0` 关闭（条件留着，下次打开不必重设） |
 | GET | `/api/watch/check[?force=1]` | 跑一轮检查，返回 `newAlerts`；`force=1` 忽略最短回源间隔 |
 | POST | `/api/watch/history` | 清空监听历史记录（基线与「已提醒」表不动，清完不会把旧鸟再报一遍） |
+| GET | `/api/version[?force=1]` | 当前版本 + 最新版本（查 GitHub Releases，默认 6 小时缓存；`force=1` 强制回源） |
+| POST | `/api/update/download` | 开始下载本平台对应的新版本安装包（立刻返回，进度看下面那条） |
+| GET | `/api/update/progress` | 下载进度 `{state, received, total, path, dir, error}` |
+| POST | `/api/update/reveal` | 在文件管理器里打开下载目录（桌面形态；`BIRD_NO_OPEN_FOLDER=1` 时只回报路径） |
+| POST | `/api/update/open` | 用系统浏览器打开 Release 页面 |
 
 > 监听的默认状态是**开着**的（`enabled: true`）：全新安装（`data/watch.json` 不存在）时状态里没有条件，
 > 页面一打开就会把当前条件同步过去并自动建基线，同时给一句「已默认开启稀有监听（可在「我的」里关掉）」的提示。

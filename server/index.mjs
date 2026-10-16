@@ -43,6 +43,8 @@ import { LayeredCache, DATA_DIR } from './cache.mjs';
 import { ensureLevels, levelOf, readCachedLevels, protectionStatus, warmUpAll, flushProtection } from './protection.mjs';
 import { IS_SEA, readWebFile, webSourceText, openInBrowser, shouldOpenBrowser } from './runtime.mjs';
 import { createWatch, pickConditions } from './watch.mjs';
+import { createUpdater } from './update.mjs';
+import { appVersion, platformLabel } from './version.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -2187,6 +2189,10 @@ const routes = {
       // 用途：双击 exe 时若端口已被占用，靠这个名字判断「是不是本服务已经在跑」
       service: 'birdreport-region-hot',
       mode: IS_SEA ? 'exe' : 'source',
+      // 版本 + 形态：排查「用户装的到底是哪一版」时第一眼看这里
+      version: appVersion().version,
+      versionSource: appVersion().source,
+      platform: platformLabel(),
       uptime: process.uptime(),
       dataDir: DATA_DIR,
       web: webSourceText(),
@@ -2243,6 +2249,34 @@ const routes = {
   async 'POST /api/watch/history'() {
     return watch.clearHistory();
   },
+
+  /* ---- 版本与更新（只查 GitHub Releases，不碰观鸟记录中心）----
+     网页端只在「我的」面板里用它们：面板一打开读一次状态，点「检查更新」才 force=1。 */
+
+  // 当前版本 + 最新版本（默认走 6 小时缓存；force=1 强制回源）
+  async 'GET /api/version'(q) {
+    return updater.check({ force: q.get('force') === '1' });
+  },
+
+  // 开始下载本平台对应的新版本安装包（立刻返回，进度靠下面的 progress 轮询）
+  async 'POST /api/update/download'() {
+    return { download: updater.startDownload() };
+  },
+
+  // 下载进度（轻量，网页端在下载时每 500ms 轮询一次）
+  async 'GET /api/update/progress'() {
+    return { download: updater.downloadState() };
+  },
+
+  // 在文件管理器里打开下载目录（桌面形态：用户自己把新程序拖过去替换）
+  async 'POST /api/update/reveal'() {
+    return updater.reveal();
+  },
+
+  // 打开 Release 页面（放更新说明与手动下载的入口）
+  async 'POST /api/update/open'() {
+    return updater.openPage();
+  },
 };
 
 /**
@@ -2262,6 +2296,12 @@ const watch = createWatch({
     routes['GET /api/hot'](new URLSearchParams({ ...conditions, ...(nocache ? { nocache: '1' } : {}) })),
   log: (m) => console.log(m),
 });
+
+/**
+ * 版本检查 / 下载器。跟 watch 一样放在 routes 之后由路由闭包引用（见上）。
+ * 缓存放 `data/update.json`（默认 6 小时一次），下载放 `data/download/`。
+ */
+const updater = createUpdater({ dataDir: DATA_DIR, log: (m) => console.log(m) });
 
 /** 带 HTTP 状态码的业务错误；路由抛它、顶层按 code 回给前端 */
 class HttpError extends Error {
@@ -2382,6 +2422,7 @@ boot()
     console.log(`\n  观鸟地区稀有榜已启动${IS_SEA ? '（独立 exe 版）' : ''}`);
     console.log(`  ▸ 网页端  ${url}`);
     console.log(`  ▸ 接口    ${url}api/health`);
+    console.log(`  ▸ 版本    v${appVersion().version}（${appVersion().source === 'git' ? '跟着 git tag' : appVersion().source}） · ${platformLabel()}`);
     console.log(`  ▸ 网页文件 ${webSourceText()}`);
     console.log(`  ▸ 缓存    TTL ${CACHE_TTL_TEXT}，内存已载入 ${cache.size} 条，落盘于 ${path.join(DATA_DIR, 'api-cache.json')}`);
     if (port !== PORT) console.log(`  ▸ 端口    ${PORT} 被占用，本次用的是 ${port}`);

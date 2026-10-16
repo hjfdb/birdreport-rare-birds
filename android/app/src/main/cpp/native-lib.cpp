@@ -85,6 +85,9 @@ Java_com_birdreport_hot_NodeRunner_startNode(JNIEnv* env, jclass /*clazz*/,
         env->ReleaseStringUTFChars(jDataDir, dataDir);
     }
     setenv("HOST", "127.0.0.1", 1);
+    // 让 Node 侧明确知道自己在 Android 上（server/version.mjs 用它选发布产物：
+    // process.platform 在 nodejs-mobile 里不一定可靠，所以这里显式给一个）。
+    setenv("BIRD_PLATFORM", "android-arm64", 1);
 
     const jsize argc = env->GetArrayLength(jArgs);
     std::vector<std::string> store;

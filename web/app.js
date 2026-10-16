@@ -686,6 +686,10 @@ async function openMy() {
   $('myModal').hidden = false;
   $('selAnim').value = animType; // 动画设置回填
   syncWatchRow(); // 稀有监听：开关与「稀有数量」回填（打开面板前可能改过条件）
+  renderVersionRow(); // 版本号回填（有新版时那颗红点就是这个状态）
+  // 顺手查一次更新：走服务端 6 小时缓存，不 force，所以打开面板几乎不花时间；
+  // 真过期了才回去问 GitHub（这是「进入我的界面就能看到有没有新版」的入口）
+  loadVersion({ silent: true });
   // 顺手读一次最新监听状态（不回源）：面板里那句「本时段 N 种 / 最稀有 M 条」要是新的
   API('watch')
     .then((w) => {
@@ -2842,6 +2846,329 @@ window.__birdWatchNotifyPending = (n) => {
 };
 
 /* ---------------------------------------------------------------- *
+ * 版本与更新
+ *
+ * 需求原话：「github 发布新版本后可以检测到版本，在我的中新增版本号，有更新显示红点，
+ * 点击是否更新提示，在主界面不用提示更新版本，进入我的界面，显示版本号旁边点击更新」。
+ *
+ * 所以这一块**只在「我的」面板里出现**：主界面不弹任何更新提示，只在版本号旁亮一个红点。
+ *
+ * 判定与下载都在服务端（server/update.mjs）：网页端跑在 WebView 里，既写不了磁盘、
+ * 也调不起系统安装器。前端只做三件事：读状态、点一下、看进度。
+ *
+ * Android 上「更新」= 让外壳去调系统安装器（BirdAndroid.installApk）；
+ * 桌面（Windows / macOS）上 = 服务端下好 zip 并解压，再打开文件夹让用户替换运行中的程序
+ * （运行中的 exe 在 Windows 上锁着自己，不可能自己覆盖自己）。
+ * ---------------------------------------------------------------- */
+const updateUi = {
+  info: null,      // /api/version 的快照（当前版本 / 最新版本 / 下载状态）
+  checking: false, // 检查请求在途
+  polling: null,   // 下载进度轮询定时器
+  revealed: false, // 下载完是否已经帮他打开过文件夹（只自动开一次）
+};
+
+const fmtBytes = (n) => {
+  const b = Number(n) || 0;
+  if (b >= 1048576) return `${(b / 1048576).toFixed(1)} MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)} KB`;
+  return `${b} B`;
+};
+
+/** 版本号那一行的状态（红点 / 文案 / 小字说明） */
+function renderVersionRow() {
+  const num = $('verText');
+  if (!num) return;
+  const w = updateUi.info;
+  const dot = $('verDot');
+  const state = $('verState');
+  const note = $('verNote');
+
+  if (!w) {
+    num.textContent = '—';
+    state.textContent = updateUi.checking ? '检查中…' : '点这里检查更新';
+    state.className = 'ma-state';
+    dot.hidden = true;
+    note.textContent = '';
+    return;
+  }
+
+  num.textContent = 'v' + w.current;
+  if (w.hasUpdate) {
+    dot.hidden = false;
+    state.textContent = `发现 v${w.latest} · 点这里更新`;
+    state.className = 'ma-state is-new';
+  } else if (w.error) {
+    dot.hidden = true;
+    state.textContent = '检查失败，点这里重试';
+    state.className = 'ma-state is-warn';
+  } else if (w.latest) {
+    dot.hidden = true;
+    state.textContent = '已是最新';
+    state.className = 'ma-state';
+  } else {
+    dot.hidden = true;
+    state.textContent = '点这里检查更新';
+    state.className = 'ma-state';
+  }
+
+  const bits = [];
+  if (w.checkedAt) bits.push(`上次检查 ${fmtTime(w.checkedAt)}`);
+  if (w.ttlMs) bits.push(`每 ${Math.round(w.ttlMs / 3600000)} 小时自动查一次`);
+  if (w.versionSource === 'fallback') bits.push('源码运行，版本号未知');
+  if (w.error) bits.push(w.error);
+  else if (w.isAndroid && w.asset && w.hasUpdate) bits.push('将下载 APK 并调起系统安装');
+  note.textContent = bits.join(' · ');
+}
+
+/**
+ * 读一次版本状态。
+ * 默认走服务端缓存（6 小时），force=true 才真去问 GitHub ——
+ * 面板一打开就查、但别每次打开都打网络。
+ */
+async function loadVersion({ force = false, silent = true } = {}) {
+  if (updateUi.checking) return null;
+  updateUi.checking = true;
+  if (!silent) renderVersionRow();
+  try {
+    const w = await API('version', force ? { force: '1' } : null);
+    updateUi.info = w;
+    return w;
+  } catch (e) {
+    if (!silent) showToast('检查更新失败：' + e.message);
+    return null;
+  } finally {
+    updateUi.checking = false;
+    renderVersionRow();
+  }
+}
+
+/** 点版本号：有更新就直接弹「是否更新」，否则现场强制查一次 */
+async function onVersionClick() {
+  const w = updateUi.info;
+  if (w && w.hasUpdate) {
+    openUpdateModal();
+    return;
+  }
+  const btn = $('btnVersion');
+  if (btn) btn.disabled = true;
+  const fresh = await loadVersion({ force: true });
+  if (btn) btn.disabled = false;
+  if (!fresh) {
+    showToast('检查更新失败，稍后再试');
+    return;
+  }
+  if (fresh.hasUpdate) openUpdateModal();
+  else if (fresh.latest) showToast(`已是最新版本 v${fresh.current}`);
+  else showToast('暂时查不到版本信息' + (fresh.error ? '：' + fresh.error : ''));
+}
+
+/* ---------------- 更新弹层 ---------------- */
+
+function openUpdateModal() {
+  const el = $('updateModal');
+  if (!el || !updateUi.info) return;
+  el.classList.remove('is-closing');
+  el.hidden = false;
+  document.body.style.overflow = 'hidden';
+  updateUi.revealed = false;
+  renderUpdateBody();
+  // 上次的下载可能还在跑（用户关掉弹层又打开）：接着看进度
+  if (updateUi.info.download && updateUi.info.download.state === 'downloading') startPollDownload();
+  // 顺带把状态刷新一下（不强制回源）：万一下载是上一轮会话留下的
+  API('update/progress')
+    .then((r) => {
+      if (updateUi.info) {
+        updateUi.info.download = r.download;
+        renderUpdateBody();
+      }
+    })
+    .catch(() => {});
+}
+
+function closeUpdateModal(immediate = false) {
+  const el = $('updateModal');
+  if (!el || el.hidden) {
+    document.body.style.overflow = '';
+    return;
+  }
+  if (immediate) {
+    el.classList.remove('is-closing');
+    el.hidden = true;
+  } else {
+    hideAnimated(el);
+  }
+  document.body.style.overflow = '';
+}
+
+function renderUpdateBody() {
+  const w = updateUi.info;
+  const sub = $('upSub');
+  const body = $('upBody');
+  const go = $('btnUpGo');
+  if (!w || !sub || !body) return;
+  const d = w.download || {};
+
+  $('upTitle').textContent = w.hasUpdate ? `发现新版本 v${w.latest}` : '版本与更新';
+  sub.innerHTML =
+    `当前 <b>v${esc(w.current)}</b>（${esc(w.platformLabel)}）` +
+    (w.hasUpdate ? ` → 最新 <span class="up-to">v${esc(w.latest)}</span>` : ' · 已是最新');
+
+  const parts = [];
+  if (w.notes) parts.push(`<div class="up-notes">${esc(w.notes)}</div>`);
+  if (w.asset) {
+    parts.push(
+      `<div class="up-row"><span class="up-k">安装包</span> ${esc(w.asset.name)} · ${esc(w.asset.sizeText)}</div>`
+    );
+  } else {
+    parts.push(`<div class="up-row up-tip warn">这个版本没有 ${esc(w.platformLabel)} 的安装包，只能去发布页手动下载。</div>`);
+  }
+
+  if (d.state === 'downloading') {
+    const pct = d.total ? Math.min(99, Math.round((d.received / d.total) * 100)) : 0;
+    parts.push(
+      `<div class="up-bar"><div class="up-bar-in" style="width:${pct}%"></div></div>` +
+        `<div class="up-pct">正在下载 ${pct}%（${fmtBytes(d.received)} / ${fmtBytes(d.total)}）…</div>`
+    );
+  } else if (d.state === 'done') {
+    if (w.isAndroid) {
+      parts.push(
+        `<p class="up-tip ok">✓ 已下载：<code>${esc(d.name)}</code> 正在调起系统安装界面…</p>` +
+          `<p class="up-tip warn">第一次安装会提示「允许来自此来源的应用」；装好后要手动打开一次新版本（系统不会自动重启应用）。</p>`
+      );
+    } else {
+      parts.push(
+        `<p class="up-tip ok">✓ 已下载${d.extracted ? '并解压' : ''}到：<code>${esc(d.dir || d.path)}</code></p>` +
+          `<p class="up-tip warn">当前程序正在运行、占着自己那个文件，所以不能自己覆盖自己：` +
+          `请把解压出来的新程序拖到原位置替换（服务端缓存 <code>data/</code> 不受影响），然后重开。</p>`
+      );
+    }
+  } else if (d.state === 'error') {
+    parts.push(`<p class="up-tip warn">下载失败：${esc(d.error)}</p>`);
+  }
+  body.innerHTML = parts.join('');
+
+  if (go) {
+    if (d.state === 'downloading') {
+      go.textContent = '下载中…';
+      go.disabled = true;
+    } else if (d.state === 'done') {
+      go.textContent = w.isAndroid ? '再去安装一次' : '打开文件夹';
+      go.disabled = false;
+    } else if (!w.hasUpdate) {
+      go.textContent = '已是最新';
+      go.disabled = true;
+    } else if (!w.asset) {
+      go.textContent = '下载并更新';
+      go.disabled = true;
+    } else {
+      go.textContent = '下载并更新';
+      go.disabled = false;
+    }
+  }
+  const info = $('upFootInfo');
+  if (info) {
+    info.textContent = d.state === 'done' && d.path ? `已保存：${d.name}` : '';
+  }
+}
+
+/** 点「下载并更新」/「打开文件夹」/「再去安装一次」——按当前状态分岔 */
+async function onUpdateAction() {
+  const w = updateUi.info;
+  if (!w) return;
+  const d = w.download || {};
+  if (d.state === 'done') {
+    if (w.isAndroid) installApk(d);
+    else revealDownload();
+    return;
+  }
+  await startUpdate();
+}
+
+async function startUpdate() {
+  if (updateUi.checking) return;
+  try {
+    const r = await API('update/download', null, null, 'POST');
+    if (updateUi.info) updateUi.info.download = r.download;
+    renderUpdateBody();
+    if (r.download && r.download.state === 'error') showToast('不能开始下载：' + r.download.error);
+    else startPollDownload();
+  } catch (e) {
+    showToast('开始下载失败：' + e.message);
+  }
+}
+
+/** 下载进度轮询：服务端读的是内存状态，500ms 一次完全够 */
+function startPollDownload() {
+  if (updateUi.polling) return;
+  updateUi.polling = setInterval(async () => {
+    try {
+      const r = await API('update/progress');
+      if (!updateUi.info) return;
+      updateUi.info.download = r.download;
+      if (!$('updateModal').hidden) renderUpdateBody();
+      if (r.download.state === 'done') {
+        stopPollDownload();
+        onDownloadDone();
+      } else if (r.download.state === 'error') {
+        stopPollDownload();
+      }
+    } catch (e) {
+      /* 服务端抽风就下一轮再说 */
+    }
+  }, 500);
+}
+
+function stopPollDownload() {
+  clearInterval(updateUi.polling);
+  updateUi.polling = null;
+}
+
+/** 下完之后的收尾：Android 立刻调起安装器；桌面自动帮他打开一次文件夹 */
+function onDownloadDone() {
+  const w = updateUi.info;
+  const d = (w && w.download) || {};
+  const open = !$('updateModal').hidden;
+  if (w && w.isAndroid) {
+    installApk(d);
+    if (open) showToast('新版本已下载，正在调起安装');
+    return;
+  }
+  if (!updateUi.revealed && open) {
+    updateUi.revealed = true;
+    revealDownload();
+  }
+}
+
+/** 让 Android 壳把下载好的 APK 交给系统安装器 */
+function installApk(d) {
+  if (!ANDROID || !d || !d.path) return;
+  try {
+    if (ANDROID.installApk) ANDROID.installApk(d.path);
+  } catch (e) {
+    showToast('调起安装失败，请到应用私有目录里手动安装：' + d.path);
+  }
+}
+
+/** 桌面：在文件管理器里打开下载目录 */
+async function revealDownload() {
+  try {
+    const r = await API('update/reveal', null, null, 'POST');
+    if (!r.ok) showToast(r.error || '打开文件夹失败');
+  } catch (e) {
+    showToast('打开文件夹失败：' + e.message);
+  }
+}
+
+/** 打开 Release 页面（系统浏览器） */
+async function openReleasePage() {
+  try {
+    await API('update/open', null, null, 'POST');
+  } catch (e) {
+    showToast('打开发布页失败：' + e.message);
+  }
+}
+
+/* ---------------------------------------------------------------- *
  * Android 返回（手势侧滑 / 返回键）→ 先关弹层
  *
  * APK 的 MainActivity 收到返回时先调这个函数：有弹层就关掉它并返回 true；
@@ -2865,6 +3192,12 @@ window.__birdHandleBack = () => {
   const wm = $('watchModal');
   if (wm && !wm.hidden) {
     closeWatchModal();
+    return true;
+  }
+  // 更新弹层（从「我的」里点出来的，排在「我的」之后）
+  const um = $('updateModal');
+  if (um && !um.hidden) {
+    closeUpdateModal();
     return true;
   }
   const dm = $('detailModal');
@@ -3448,6 +3781,11 @@ function bind() {
       closeWatchModal();
       return;
     }
+    // 更新弹层是从「我的」里点出来的，DOM 排在「我的」之后 → 要先关它
+    if (!$('updateModal').hidden) {
+      closeUpdateModal();
+      return;
+    }
     // 「我的」面板在 DOM 里排在明细弹层之后（层级更高），所以先关它
     if (!$('myModal').hidden) {
       closeMy();
@@ -3506,6 +3844,16 @@ function bind() {
     if (watchUi.enabled) watchStart({ reconfig: true });
     else syncWatchRow();
   });
+  // ---- 版本与更新（只在「我的」里用）----
+  $('btnVersion').addEventListener('click', onVersionClick);
+  $('upClose').addEventListener('click', () => closeUpdateModal());
+  $('btnUpLater').addEventListener('click', () => closeUpdateModal());
+  $('updateModal').addEventListener('click', (e) => {
+    if (e.target === $('updateModal')) closeUpdateModal(); // 点遮罩关闭（下载会继续）
+  });
+  // 一个按钮按状态分岔：下载 / 打开文件夹 / 再去安装一次（见 onUpdateAction）
+  $('btnUpGo').addEventListener('click', onUpdateAction);
+  $('btnUpPage').addEventListener('click', openReleasePage);
   $('watchPill').addEventListener('click', openWatchModal);
   $('watchCardHistory').addEventListener('click', () => {
     hideWatchCard();
@@ -3705,4 +4053,8 @@ async function restoreRegion(init) {
   // 监听状态存在服务端（data/watch.json），这里只把状态读回来：
   // 刷新页面 / 换设备打开，监听开着就继续开着
   restoreWatch();
+
+  // 版本：后台静默查一次（服务端 6 小时缓存），这样「我的」里的红点打开就是最新的。
+  // 主界面**不**做任何提示 —— 这一步只更新面板里的那一行状态。
+  loadVersion({ silent: true });
 })();

@@ -77,6 +77,10 @@ jobs:
 
       - name: 构建
         # macOS 上这一步内部还会补一次 ad-hoc 签名（见 build-exe.mjs 的 stageInject）
+        # BIRD_VERSION 会被 build-exe.mjs 写进 web/version.json（内嵌进 exe），
+        # 于是双击打开的程序自己知道「我是 v0.0.16」，「我的」面板里能显示、也能比对更新。
+        env:
+          BIRD_VERSION: ${{ github.ref_name }}
         run: node build-exe.mjs
 
       - name: 打包 zip
@@ -209,9 +213,12 @@ jobs:
         run: node android/fetch-nodejs-mobile.mjs
 
       - name: 准备签名密钥
-        # 没配 Secrets 也能构建成功：app/build.gradle 会退回 debug 密钥，
-        # 产物依然可以安装（只是不能上架、且换签名后需要卸载重装）。
-        # 配了 Secrets 就用正式密钥，签名信息不会落盘到工作区（放在 RUNNER_TEMP）。
+        # **密钥不随仓库走**：android/keystore* 已在 .gitignore 里（2026-10-16 仓库转 public 时
+        # 发现旧钥匙是随库提交的、等于把签名私钥公开了，于是整体换了新钥匙并只放在 Secrets）。
+        # 四个 Secrets：ANDROID_KEYSTORE_BASE64（.jks 的 base64，单行）、
+        #            ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD。
+        # 打 tag 发布时缺了就直接失败 —— debug 签名的包一旦发出去，用户之后想换成正式签名
+        # 必须先卸载重装，这个坑不该留给用户踩。手动试跑（workflow_dispatch）则允许退回 debug。
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -219,11 +226,11 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
-            if [ -f android/keystore.properties ]; then
-              echo "::notice::未配置 Secrets，将使用随仓库提交的 android/keystore.properties 签名"
-            else
-              echo "::notice::未配置 Secrets 且仓库里没有 keystore.properties，release APK 将用 debug 密钥签名，仅供测试分发"
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              echo "::error::打 tag 发布必须配置 ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD 四个 Secrets"
+              exit 1
             fi
+            echo "::warning::未配置签名 Secrets，本次手动试跑的 APK 用 debug 密钥签名，仅供测试，不要分发"
             exit 0
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
@@ -233,7 +240,7 @@ jobs:
             echo "BIRD_KEY_ALIAS=$KEY_ALIAS"
             echo "BIRD_KEY_PASSWORD=$KEY_PASSWORD"
           } >> "$GITHUB_ENV"
-          echo "已启用正式签名密钥"
+          echo "已启用正式签名密钥（来自 Secrets，未落盘到工作区）"
 
       - name: 决定版本号
         id: ver

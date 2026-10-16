@@ -338,6 +338,20 @@
           </div>
           <p class="mw-hint" id="watchRowHint"></p>
         </div>
+
+        <!-- 版本与更新：**只在这里出现** —— 主界面刻意不做任何更新提示。
+             有新版本时版本号旁边亮一个红点、右边写「发现 v0.0.17」，点它才弹「是否更新」。
+             版本号本身来自服务端（/api/version，由打包脚本写进 web/version.json），
+             所以 exe / APK / 源码三种形态都能报出自己是什么版本。 -->
+        <div class="my-about">
+          <button class="ma-ver" id="btnVersion" type="button" title="点这里检查更新">
+            <span class="ma-label">版本</span>
+            <span class="ma-num" id="verText">—</span>
+            <span class="ma-dot" id="verDot" hidden aria-hidden="true"></span>
+            <span class="ma-state" id="verState"></span>
+          </button>
+          <p class="ma-note" id="verNote"></p>
+        </div>
       </div>
     </div>
   </div>
@@ -391,6 +405,28 @@
           <button class="btn btn-mini" id="btnWatchClear" type="button"
             title="清空这里的记录；已经提醒过的鸟种不会因此重复报">清空记录</button>
           <button class="btn btn-mini" id="btnWatchStop" type="button">停止监听</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 发现新版本后的确认 / 下载 / 安装弹层。
+       从「我的」里点版本号进来；内容全部由 JS 渲染（下载进度条、解压结果、安装提示…）。
+       刻意不在主界面弹它 —— 用户要求「主界面不用提示更新版本」。 -->
+  <div id="updateModal" class="modal-mask" hidden>
+    <div class="modal modal-update" role="dialog" aria-modal="true" aria-labelledby="upTitle">
+      <div class="modal-head">
+        <h3 id="upTitle">发现新版本</h3>
+        <button class="modal-close" id="upClose" aria-label="关闭" title="关闭（Esc）">×</button>
+      </div>
+      <div class="modal-sub" id="upSub"></div>
+      <div class="modal-body" id="upBody"></div>
+      <div class="modal-foot" id="upFoot">
+        <span class="pager-info" id="upFootInfo"></span>
+        <div class="pager-btns">
+          <button class="btn btn-mini" id="btnUpPage" type="button" title="在浏览器里打开 GitHub Release 页面">查看发布页</button>
+          <button class="btn btn-mini" id="btnUpLater" type="button">稍后</button>
+          <button class="btn btn-primary btn-mini" id="btnUpGo" type="button">下载并更新</button>
         </div>
       </div>
     </div>

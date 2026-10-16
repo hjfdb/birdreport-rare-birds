@@ -10,6 +10,10 @@
          （window.BirdAndroid.requestNotify）主动申请一次，见 AndroidBridge。
          13 以前这条声明会被系统忽略（安装即得，用户可在系统设置里关）。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 应用内更新：服务端把新版 APK 下到应用私有目录后，交给系统安装器去装。
+         Android 8（API 26）起这是个**普通**权限（安装时即得），但还要用户在系统里
+         允许「安装未知应用」才会真的弹安装界面 —— 系统会自己引导，页面里也有提示。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="@string/app_name"
@@ -34,5 +38,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 应用内更新用：把「应用私有目录里下好的 APK」以只读内容 URI 交给系统安装器。
+             自己写的极简 ContentProvider（不引 AndroidX，见 ApkFileProvider 的类注释）。
+             exported=false + grantUriPermissions=true 是标准组合：
+             不对外暴露，但可以通过 Intent 的 FLAG_GRANT_READ_URI_PERMISSION 临时授权给安装器。 -->
+        <provider
+            android:name=".ApkFileProvider"
+            android:authorities="com.birdreport.hot.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

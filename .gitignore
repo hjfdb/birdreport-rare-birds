@@ -4,6 +4,10 @@ node_modules/
 # 构建产物（node build-exe.mjs 生成）
 build/
 dist/
+# 打包脚本写进去的版本戳（node build-exe.mjs / android/build-apk.mjs 生成）：
+# 它必须落在 web/ 下才会被 exe 的内嵌资源与 APK 的 assets 一起收进去，
+# 但它是生成物，不进版本库（源码方式跑没有它，会自动退回 git tag，见 server/version.mjs）。
+web/version.json
 
 # 运行时缓存（会自动重建）
 data/
@@ -27,12 +31,17 @@ android/app/build/
 android/app/.cxx/
 # 机器相关：本机 Android SDK 位置
 android/local.properties
-# 签名密钥：**随私有库提交**（android/keystore.properties + android/keystore/birdreport.jks），
-# 本地与 CI 共用同一把钥匙。仓库若转为公开，先把这两个文件从历史里清掉、并换一把新钥匙
-# （见 README「关于签名」）。其它位置散落的密钥文件仍然忽略，防止误提交。
+# 签名密钥：**绝不进版本库**。
+# 2026-10-16 把仓库从 private 转成 public 时发现：旧钥匙（android/keystore/birdreport.jks +
+# android/keystore.properties）一直是随仓库提交的，转公开后等于是把签名私钥给了所有人
+# —— 拿到它就能签一个同包名的恶意 APK，系统会因为「签名相同」当成正常升级装上去。
+# 已整体换成新钥匙：**只放在 GitHub Secrets**（ANDROID_KEYSTORE_BASE64 等四个，
+# 见 .github/workflows/release.yml），本机那份 android/keystore.properties + keystore/*.jks
+# 只留在本地、不进库。详见 README「关于签名」。
 android/*.keystore
 android/*.jks
 android/**/*.jks
-!android/keystore/**
+android/keystore.properties
+android/keystore/
 # nodejs-mobile 预编译运行时：解包后约 190 MB，用 android/fetch-nodejs-mobile.mjs 按需拉取
 android/third_party/

@@ -30,6 +30,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { detectVersion, writeBakedVersion } from './server/version.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -142,6 +143,18 @@ function esbuildArgs() {
     '--log-level=warning',
     `--outfile=${BUNDLE_FILE}`,
   ];
+}
+
+/**
+ * 把版本号写进 `web/version.json` —— 第 1 步是按**整目录**收 web/ 的，所以它会跟着内嵌进 exe，
+ * 程序起来后自己就知道「我是哪一版」（/api/version 与「我的」面板里的版本号靠它）。
+ * 必须在 stageConfig() 之前写。
+ */
+function stampVersion() {
+  // detectVersion 一定要拿到仓库根目录：本脚本在仓库根下，runtime.mjs 推算的 DEV_ROOT
+  // 会比它高一层（见 version.mjs 的 fromGit 注释）
+  const { version, file } = writeBakedVersion(WEB, { version: detectVersion(ROOT) });
+  log('0/4', `已写入版本戳 ${path.relative(ROOT, file)} → ${version}`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -265,6 +278,8 @@ async function main() {
   if (stage !== 'all' && !STAGES[stage]) throw new Error(`未知步骤 "${stage}"。${usageHint()}`);
 
   console.log('\n打包「观鸟地区稀有榜」为单文件 exe\n');
+
+  if (stage === 'all' || stage === 'config') stampVersion();
 
   if (stage === 'all') {
     stageConfig();
