@@ -991,19 +991,18 @@ html.anim-none .watch-card { animation: none; }
 .dtable .d-latin { font-size: 11.5px; color: var(--muted); font-style: italic; }
 .dtable .d-dim { color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
 .dtable .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
-/* 行尾的「介绍 ›」：跳这个鸟种的档案。做成按钮（可聚焦、回车即触发），
-   样式上压成一行小字链接，别抢了行里主内容的视觉重量。 */
-.dtable .d-intro {
-  font: inherit; font-size: 12px; color: var(--primary);
-  background: none; border: 0; padding: 2px 5px; border-radius: 5px;
-  cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent;
+/* ---------------- 明细行跳转 ----------------
+   鸟种明细整行可点（is-taxon-jump）→ 鸟种档案；报告明细整行可点（is-jump）→ 报告详情。
+   名字本身就是入口，行尾不再放「介绍 ›」按钮（手机端的紧凑卡片也放不下它）。 */
+.dtable tr.is-jump,
+.dtable tr.is-taxon-jump { cursor: pointer; }
+.dtable tr.is-jump:hover,
+.dtable tr.is-taxon-jump:hover { background: #f2f8fe; }
+.dtable tr.is-taxon-jump:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: -2px;
 }
-.dtable .d-intro:hover { background: #eaf3fd; text-decoration: underline; }
-.dtable .d-intro:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-
-/* ---------------- 报告明细跳转 ---------------- */
-.dtable tr.is-jump { cursor: pointer; }
-.dtable tr.is-jump:hover { background: #f2f8fe; }
+/* 名字后面的徽章组与名字之间留口气，别糊成一团 */
+.dtable .d-name .badge { margin-left: 4px; }
 .rep-link { color: var(--primary); text-decoration: none; font-weight: 550; }
 .rep-link:hover { text-decoration: underline; }
 
@@ -1253,6 +1252,32 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
   .dtable:not(.dtable-report) td:nth-child(7) { flex: 1 1 100%; }
   /* 保护等级列是徽章组，跟在数字后面会显得零散，单独起一行并去掉上边距 */
   .dtable:not(.dtable-report) td:nth-child(7) .badges { margin-top: 0; }
+
+  /* 鸟种明细：不走上面的通用堆叠，改用**报告详情那种紧凑卡片**（参考 rp-item 的排版）：
+     ① 名字 + 徽章组（未加新 / 等级 / 特有 / IUCN）…… 本时段记录贴右
+     ② 学名（名字格的第二行 —— 名字格跨两行，徽章自然与名字同行）
+     ③ 目 · 科 ｜ 近两年 ｜ 疑问
+     整行可点 → 鸟种档案，行尾不再有「介绍 ›」。徽章并入名字行后表格只剩 6 列。 */
+  .dtable.dtable-taxon tbody tr {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      'name count .'
+      'name .    .'
+      'of   hist doubt';
+    align-items: start;
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 10px 4px 9px;
+  }
+  .dtable.dtable-taxon td:nth-child(2) { grid-area: name; }
+  .dtable.dtable-taxon td:nth-child(3) { grid-area: of; align-self: end; }
+  .dtable.dtable-taxon td:nth-child(4) { grid-area: count; }
+  .dtable.dtable-taxon td:nth-child(5) { grid-area: hist; text-align: left; align-self: end; }
+  .dtable.dtable-taxon td:nth-child(6) { grid-area: doubt; align-self: end; }
+  /* 序号没必要；疑问为空时整格隐藏（桌面仍显示「—」占位，见 taxonRow 的 data-blank） */
+  .dtable.dtable-taxon td:first-child,
+  .dtable.dtable-taxon td[data-blank='1'] { display: none; }
 
   /* 拼图：勾选条允许换行、格子收紧。一格一种，窄屏一行能放下 3~4 个，
      科多的时候整页才不会长到没法看。 */

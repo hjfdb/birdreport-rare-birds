@@ -3689,31 +3689,31 @@ function detailSubText() {
 
 function taxonRow(x, no) {
   const hist = x.historyCount === null || x.historyCount === undefined ? '—' : fmt(x.historyCount);
-  const doubt = x.doubt ? `疑问 ${fmt(x.doubtCount)}` : '—';
-  // 明细表列数固定（窄屏靠 CSS 换行），所以「未加新」不做独立一列，
-  // 直接跟在中文名后面当一枚小标记，窄屏也不会被挤掉
+  // 徽章组直接跟在中文名后面（不再单独立「保护等级」一列）：手机上是紧凑卡片
+  // （名字 + 徽章一行、学名一行、目科 + 数字一行，见 style.css 手机端的 dtable-taxon 块），
+  // 桌面表格里徽章跟在名字后面也照样读得清，列数从 8 收到 6。
+  const badges =
+    `${levelBadge(x)}${x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : ''}${iucnBadge(x.iucn)}`;
+  // 「未加新」跟在中文名后面当一枚小标记，窄屏也不会被挤掉
   const liferTag = x.lifer
     ? `<span class="badge lifer" title="${esc(state.lifer)} 的人生鸟种里没有这一种">未加新</span>`
     : '';
-  return `<tr${x.doubt ? ' class="is-doubt"' : ''}${x.lifer ? ' data-lifer="1"' : ''}>
+  // 「疑问」「近两年」：没有时桌面仍显示「—」占位，窄屏卡片排版里用 data-blank
+  // 让 CSS 整格隐藏（不然一排「近两年 —」「疑问 —」净是噪音）。data-label 只写一遍列名。
+  const histBlank = hist === '—';
+  const cls = `is-taxon-jump${x.doubt ? ' is-doubt' : ''}`;
+  return `<tr data-lifer="${x.lifer ? 1 : 0}"${x.taxonId
+    ? ` class="${cls}" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}"` +
+      ` data-count="${esc(x.count)}" tabindex="0" title="点看「${esc(x.name)}」的鸟种介绍"`
+    : ` class="${x.doubt ? 'is-doubt' : ''}"`}>
     <td class="ta-c num">${no}</td>
-    <td><div class="d-name${x.doubt ? ' is-doubt' : ''}${x.lifer ? ' is-lifer' : ''}">${esc(x.name)}${liferTag}</div><div class="d-latin">${esc(x.latin || '')}</div></td>
+    <td><div class="d-name${x.doubt ? ' is-doubt' : ''}${x.lifer ? ' is-lifer' : ''}">${esc(x.name)}${liferTag}${badges}</div><div class="d-latin">${esc(x.latin || '')}</div></td>
     <td class="d-dim">${esc([x.order, x.family].filter(Boolean).join(' · '))}</td>
     <td class="ta-r num strong" data-label="本时段">${fmt(x.count)}</td>
-    <td class="ta-r num" data-label="近两年">${hist}</td>
-    <td class="ta-r num${x.doubt ? ' is-doubt' : ''}">${doubt}</td>
-    <td><div class="badges">${levelBadge(x)}${x.chinaEndemic ? '<span class="badge endemic">中国特有</span>' : ''}${iucnBadge(x.iucn)}</div></td>
-    ${x.taxonId ? `<td class="ta-r" data-label="鸟种">${introBtn(x.taxonId, x.name)}</td>` : '<td></td>'}
+    <td class="ta-r num" data-label="近两年"${histBlank ? ' data-blank="1"' : ''}>${hist}</td>
+    <td class="ta-r num${x.doubt ? ' is-doubt' : ''}" data-label="疑问"${x.doubt ? '' : ' data-blank="1"'}>${x.doubt ? fmt(x.doubtCount) : '—'}</td>
   </tr>`;
 }
-
-/**
- * 「看这个鸟种的介绍」的跳转按钮（鸟种明细 / 按鸟种收窄的报告明细里都用它）。
- * 用 <button>：它本身就是可聚焦、可回车 / 空格触发的，不用另外补键盘逻辑。
- */
-const introBtn = (taxonId, name, label = '介绍 ›') =>
-  `<button class="d-intro" type="button" data-taxon-id="${esc(taxonId)}" data-taxon-name="${esc(name)}"` +
-  ` title="看「${esc(name)}」的鸟种介绍">${esc(label)}</button>`;
 
 function reportRow(x, no, compact = false) {
   const span = x.startTime && x.endTime ? `${x.startTime.slice(5, 16)} ~ ${x.endTime.slice(11, 16)}` : '';
@@ -3774,8 +3774,9 @@ function renderDetail() {
   if (!rows.length) {
     $('detailBody').innerHTML = `<div class="notice">${detail.q ? '本页没有匹配的记录。' : '该条件下没有明细数据。'}</div>`;
   } else if (detail.kind === 'taxon') {
-    $('detailBody').innerHTML = `<table class="dtable">
-      <thead><tr><th class="ta-c">#</th><th>中文名 / 学名</th><th>目 · 科</th><th class="ta-r">本时段记录</th><th class="ta-r">近两年记录</th><th class="ta-r">疑问数据</th><th>保护等级</th><th class="ta-r">介绍</th></tr></thead>
+    // dtable-taxon：窄屏切换成「报告详情那种紧凑卡片」的标记（见 style.css 手机端块）
+    $('detailBody').innerHTML = `<table class="dtable dtable-taxon">
+      <thead><tr><th class="ta-c">#</th><th>鸟种</th><th>目 · 科</th><th class="ta-r">本时段记录</th><th class="ta-r">近两年记录</th><th class="ta-r">疑问数据</th></tr></thead>
       <tbody>${rows.map((x, i) => taxonRow(x, offset + i + 1)).join('')}</tbody>
     </table>`;
   } else {
@@ -4101,12 +4102,13 @@ function bind() {
       openPhotos(imgBtn.dataset.imgAct, imgBtn.dataset.imgTaxon, imgBtn.dataset.imgName);
       return;
     }
-    // 鸟种明细表行尾的「介绍 ›」→ 这个鸟种的档案。
-    // （只有**鸟种明细**用行内按钮：它每一行就是一个鸟种，入口只能落在行上。
+    // 鸟种明细里点**整行** → 这个鸟种的档案。
+    // （原来在行尾放「介绍 ›」按钮；手机端改成紧凑卡片后名字本身就是入口，
+    //   按钮成了多余的 —— 现在桌面 / 手机都是点行跳转，行尾不再放按钮。
     //   按鸟种收窄的「… · 报告明细」整个弹层都是同一种鸟，入口在标题上，见 syncDetailIntro。）
-    const intro = e.target.closest('.d-intro[data-taxon-id]');
-    if (intro) {
-      openTaxonCard(intro.dataset.taxonId, intro.dataset.taxonName);
+    const jump = e.target.closest('tr.is-taxon-jump[data-taxon-id]');
+    if (jump && detail.kind === 'taxon') {
+      openTaxonCard(jump.dataset.taxonId, jump.dataset.taxonName, jump.dataset.count);
       return;
     }
     // 收集拼图里点鸟名 → 这个鸟种的档案（同一个弹层里换视图，可 ‹ 返回拼图）
@@ -4439,13 +4441,17 @@ function bind() {
     }
     openMyPuzzle();
   });
-  // 报告详情里用键盘点鸟种（行是 div+role=button，回车 / 空格不会自己触发 click）
+  // 可聚焦的「行 / 卡片」用键盘点鸟种（回车 / 空格不会自己触发 click）：
+  // 报告详情的 rp-item、鸟种明细的整行（is-taxon-jump）都走这里
   $('detailBody').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
-    const sp = e.target.closest && e.target.closest('.rp-item.is-link[data-taxon-id]');
-    if (!sp || detail.pane !== 'report') return;
+    const el = e.target.closest && e.target.closest('.rp-item.is-link[data-taxon-id], tr.is-taxon-jump[data-taxon-id]');
+    if (!el) return;
+    if (el.classList.contains('rp-item') && detail.pane !== 'report') return;
+    if (el.classList.contains('is-taxon-jump') && detail.kind !== 'taxon') return;
     e.preventDefault(); // 空格会滚页，必须拦掉
-    openTaxonCard(sp.dataset.taxonId, sp.dataset.taxonName);
+    openTaxonCard(el.dataset.taxonId, el.dataset.taxonName,
+      el.dataset.count); // rp-item 没有这个属性 → undefined，档案里按 0 处理
   });
   // 拼图里的两个勾选项：切换后只重画列表，不重新请求
   $('detailBody').addEventListener('change', (e) => {
