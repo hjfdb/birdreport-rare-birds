@@ -65,6 +65,8 @@ public class WatchNotifier {
     private volatile boolean enabled = false;
     private volatile boolean foreground = true;
     private volatile long intervalMs = MIN_INTERVAL_MS;
+    /** 下一次轮询的时间点（uptimeMillis）；0 = 现在没有排着队。sync 靠它判断「已经在跑了没有」 */
+    private volatile long nextTickAt = 0;
 
     /** 已发现但还没让页面看过的条数：回到前台时交给页面补个角标 */
     private int pendingCount = 0;
@@ -127,33 +129,62 @@ public class WatchNotifier {
     /**
      * 由网页端通过 JS 桥调用（开启 / 停止监听、以及页面每次恢复状态时）。
      *
+     * <p>⚠ 定时器**只在「该不该跑」或「节奏变了」时才重排**。以前是「开着就无条件重排」，
+     * 而页面改「稀有数量」、条件自动跟随都会各调一次 sync —— 定时器被一遍遍推回起点，
+     * 表现就是「改完监听设置后要干等 10 分钟才有第一次后台检查」，用户以为通知坏了。
+     *
      * @param on        监听是否开着；false 时停掉定时器
      * @param intervalMs 服务端给的轮询间隔，会被夹到 [10 分钟, 1 小时]
      */
     public void sync(final boolean on, long intervalMs) {
-        this.intervalMs = Math.max(MIN_INTERVAL_MS, Math.min(MAX_INTERVAL_MS, intervalMs));
+        final long next = Math.max(MIN_INTERVAL_MS, Math.min(MAX_INTERVAL_MS, intervalMs));
+        final boolean wasEnabled = this.enabled;
+        final long wasInterval = this.intervalMs;
+        this.intervalMs = next;
         this.enabled = on;
-        Log.i(TAG, "后台轮询 " + (on ? "开启，间隔 " + (this.intervalMs / 60000) + " 分钟" : "关闭"));
-        if (on) {
-            ensureThread();
-            handler.removeCallbacks(tick);
-            // 刚开启时先等一个间隔：此刻用户多半刚在页面上开过监听，那一轮刚回源过
-            handler.postDelayed(tick, this.intervalMs);
-        } else if (handler != null) {
-            handler.removeCallbacks(tick);
+
+        if (!on) {
+            if (handler != null) {
+                handler.removeCallbacks(tick);
+            }
+            nextTickAt = 0;
+            Log.i(TAG, "后台轮询关闭");
+            return;
         }
+        ensureThread();
+        // 已经在按同样的节奏跑：别动它（见上面的说明）
+        if (wasEnabled && wasInterval == next && nextTickAt > 0) {
+            Log.i(TAG, "后台轮询保持原节奏，间隔 " + (next / 60000) + " 分钟");
+            return;
+        }
+        // 刚开启时先等一个间隔：此刻用户多半刚在页面上开过监听，那一轮刚回源过
+        schedule(next);
+        Log.i(TAG, "后台轮询开启，间隔 " + (next / 60000) + " 分钟");
     }
 
-    /** MainActivity 的 onStart / onStop 调这个 */
+    /**
+     * MainActivity 的 onStart / onStop 调这个。
+     *
+     * <p>⚠ 只有「前台 → 后台」这一个方向需要重排。条件曾经写成 {@code (was || fg)}，
+     * 而前台→后台时 {@code was == true}，会直接 return —— 那句「先安排一次」从来没执行过，
+     * 退到后台后只能干等一个完整间隔才发现新鸟种。
+     */
     public void setForeground(boolean fg) {
         boolean was = this.foreground;
         this.foreground = fg;
-        if (was || fg || !enabled || handler == null) {
+        if (!was || fg || !enabled || handler == null) {
             return;
         }
         // 刚刚退到后台：不等满一个间隔，先安排一次
+        schedule(BACKGROUND_FIRST_DELAY_MS);
+        Log.i(TAG, "已退到后台，" + (BACKGROUND_FIRST_DELAY_MS / 1000) + " 秒后先查一次");
+    }
+
+    /** 安排下一次轮询，并记下时间点（sync 靠它判断「已经在跑了没有」） */
+    private void schedule(long delayMs) {
         handler.removeCallbacks(tick);
-        handler.postDelayed(tick, BACKGROUND_FIRST_DELAY_MS);
+        handler.postDelayed(tick, delayMs);
+        nextTickAt = android.os.SystemClock.uptimeMillis() + delayMs;
     }
 
     /** 取走「已发现但页面还没看过」的条数（回前台时用），顺带清零 */
@@ -179,6 +210,7 @@ public class WatchNotifier {
         @Override
         public void run() {
             if (!enabled) {
+                nextTickAt = 0;
                 return;
             }
             // 前台不发：网页端自己在轮询同一支接口，见类注释里的「消费式」说明
@@ -190,7 +222,9 @@ public class WatchNotifier {
                 }
             }
             if (enabled) {
-                handler.postDelayed(this, intervalMs);
+                schedule(intervalMs);
+            } else {
+                nextTickAt = 0;
             }
         }
     };
@@ -204,6 +238,10 @@ public class WatchNotifier {
         if (!json.optBoolean("enabled", false)) {
             // 用户在别处（网页 / 另一台设备）把监听关了：本机也跟着停
             enabled = false;
+            if (handler != null) {
+                handler.removeCallbacks(tick);
+            }
+            nextTickAt = 0;
             Log.i(TAG, "服务端报告监听已关闭，停止后台轮询");
             return;
         }

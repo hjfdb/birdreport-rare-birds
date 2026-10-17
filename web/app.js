@@ -2700,9 +2700,12 @@ function syncWatchRow() {
   // 数量是绝对条数，大范围下命中不了是常态 —— 直接告诉用户该调到多少
   const th = Number((w && w.maxHistoryCount) || 0);
   if (w && w.scanned && w.minHistoryCount !== null && w.minHistoryCount !== undefined && w.minHistoryCount > th) {
+    // 「命中不了」的后果必须说出来：这时 rareCount 恒为 0，监听在空转 ——
+    // 用户看到的是「开着呢，可一条提醒也没有」，而根因只是数量没调够。
     lines.push(
-      `<span class="mw-status"><span class="warn">数量 ${watchThresholdLabel(th)} 一种也命中不了，` +
-        `请调到 ${fmt(w.minHistoryCount)} 条以上</span></span>`
+      `<span class="mw-status"><span class="warn">数量 ${watchThresholdLabel(th)} 命中不了：` +
+        `本时段最稀有的也有 ${fmt(w.minHistoryCount)} 条，这样一条提醒都不会有 —— ` +
+        `调到 ${fmt(w.minHistoryCount)} 条以上</span></span>`
     );
   }
 
