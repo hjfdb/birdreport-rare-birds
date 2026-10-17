@@ -3698,9 +3698,9 @@ function taxonRow(x, no) {
   const liferTag = x.lifer
     ? `<span class="badge lifer" title="${esc(state.lifer)} 的人生鸟种里没有这一种">未加新</span>`
     : '';
-  // 「疑问」「近两年」：没有时桌面仍显示「—」占位，窄屏卡片排版里用 data-blank
-  // 让 CSS 整格隐藏（不然一排「近两年 —」「疑问 —」净是噪音）。data-label 只写一遍列名。
-  const histBlank = hist === '—';
+  // 「近两年」「疑问」没有数据时也照常显示「—」占位，**不隐藏整格**：
+  // 手机端三列数字是固定列宽，藏掉一格会让右边缘时有时无、每行参差不齐
+  // （用户明确要求三个数字一直显示）。data-label 只写列名一次，标签由 CSS 生成。
   const cls = `is-taxon-jump${x.doubt ? ' is-doubt' : ''}`;
   return `<tr data-lifer="${x.lifer ? 1 : 0}"${x.taxonId
     ? ` class="${cls}" data-taxon-id="${esc(x.taxonId)}" data-taxon-name="${esc(x.name)}"` +
@@ -3710,8 +3710,8 @@ function taxonRow(x, no) {
     <td><div class="d-name${x.doubt ? ' is-doubt' : ''}${x.lifer ? ' is-lifer' : ''}">${esc(x.name)}${liferTag}${badges}</div><div class="d-latin">${esc(x.latin || '')}</div></td>
     <td class="d-dim">${esc([x.order, x.family].filter(Boolean).join(' · '))}</td>
     <td class="ta-r num strong" data-label="本时段">${fmt(x.count)}</td>
-    <td class="ta-r num" data-label="近两年"${histBlank ? ' data-blank="1"' : ''}>${hist}</td>
-    <td class="ta-r num${x.doubt ? ' is-doubt' : ''}" data-label="疑问"${x.doubt ? '' : ' data-blank="1"'}>${x.doubt ? fmt(x.doubtCount) : '—'}</td>
+    <td class="ta-r num" data-label="近两年">${hist}</td>
+    <td class="ta-r num${x.doubt ? ' is-doubt' : ''}" data-label="疑问">${x.doubt ? fmt(x.doubtCount) : '—'}</td>
   </tr>`;
 }
 

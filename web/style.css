@@ -1255,9 +1255,9 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
 
   /* 鸟种明细：不走上面的通用堆叠，改用**紧凑卡片**（参考报告详情 rp-item 的排版）：
      ① 名字 + 徽章组（未加新 / 等级 / 特有 / IUCN）… 学名（同一格的第二行）
-     ② 目 · 科 …………………… 本时段 ｜ 近两年 ｜ 疑问
+     ② 目 · 科 …………………… 4 ｜ 16 ｜ —（数字在上、极小标签在下）
      ⚠ 三个数字**必须同一行、各自独立列、右对齐**，且**行与行之间也要对齐**。
-       这里有两个坑，都踩过：
+       这里踩过三个坑，记下来免得再犯：
        ▸ 坑一：`grid-template-areas` 里每个命名区域必须是**矩形**。曾经写成
          'name name name name' / 'name . . .'（第 1 行占 4 列、第 2 行只占 1 列），
          不是矩形 → 整条声明被解析器丢弃 → 退化成自动放置 → 单元格全部挤成一坨。
@@ -1265,46 +1265,55 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
        ▸ 坑二：每个 `<tr>` 是各自独立的 grid 容器，`auto` 列宽会按**各行自己的内容**
          分别计算 —— 单行内看着齐，行与行之间照样错位。所以三个数字列用**固定 px 宽**，
          所有行的列几何完全一致，纵向才扫得过去。
+       ▸ 坑三：三格字号不一致（14 vs 12）会让顶端 / 基线错开，所以只靠字重与颜色分主次。
      整行可点 → 鸟种档案，行尾不再有「介绍 ›」。徽章并入名字行后表格只剩 6 列。 */
   .dtable.dtable-taxon tbody tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px 44px 44px;
+    /* 三个数字列固定宽度；每行几何完全一致，纵向才对得齐（见坑二） */
+    grid-template-columns: minmax(0, 1fr) 50px 50px 50px;
     grid-template-areas:
       'name name name name'
       'of   c1   c2   c3';
-    align-items: start;
-    column-gap: 8px;
+    align-items: start;  /* 目·科 与数字顶端对齐；用 end 会沉到标签那行、看着像多出空行 */
+    column-gap: 5px;
     row-gap: 3px;
     padding: 10px 4px 9px;
     border-bottom: 1px solid var(--border);
   }
+  /* 名字 / 学名两行收紧行高（继承来的 1.55 在卡片里太空），整张卡片随之变矮 */
+  .dtable.dtable-taxon .d-name { line-height: 1.35; }
+  .dtable.dtable-taxon .d-latin { line-height: 1.35; margin-top: 1px; }
   .dtable.dtable-taxon td:nth-child(2) { grid-area: name; }
-  .dtable.dtable-taxon td:nth-child(3) { grid-area: of; }
+  .dtable.dtable-taxon td:nth-child(3) { grid-area: of; font-size: 11.5px; }
   .dtable.dtable-taxon td:nth-child(4) { grid-area: c1; }
   .dtable.dtable-taxon td:nth-child(5) { grid-area: c2; }
   .dtable.dtable-taxon td:nth-child(6) { grid-area: c3; }
-  /* 三个数字：列名压成小字单独一行顶在上面、数字在下面右对齐。
-    表头在窄屏是隐藏的，不补列名就是三个没人认得的数字。 */
+
+  /* 数字簇：**数字在上、标签在下**。
+     之前是标签压在上面、数字在下面，每行都像又重复了一遍表头，密集又花；
+     反过来读就是「4 本时段 / 16 近两年」，一眼是统计值而不是小表格。
+     flex + order 让 ::before 生成的那行标签排到数字后面。 */
+  .dtable.dtable-taxon td[data-label] {
+    display: flex; flex-direction: column; align-items: flex-end;
+    font-size: 13.5px; font-weight: 600; line-height: 1.1;
+    color: var(--text-2); white-space: nowrap;
+  }
   .dtable.dtable-taxon td[data-label]::before {
-    display: block; content: attr(data-label);
-    color: var(--muted); font-size: 10px; font-weight: 400;
-    line-height: 1.25; margin-bottom: 1px;
+    order: 2; content: attr(data-label);
+    margin-top: 2px;
+    color: var(--muted); font-size: 9.5px; font-weight: 400;
+    line-height: 1.2; letter-spacing: 0.02em;
   }
-  /* 三格字号 / 行高必须**完全一致**：只要有一个字号不同，行高就不同，
-     顶端和基线都会错开 —— 正是「数据没对齐」的观感来源。
-     主次改用字重 + 颜色表达，不动字号。 */
-  .dtable.dtable-taxon td:nth-child(4),
-  .dtable.dtable-taxon td:nth-child(5),
-  .dtable.dtable-taxon td:nth-child(6) {
-    text-align: right; white-space: nowrap;
-    font-size: 13px; line-height: 1.35;
-  }
-  /* 本时段是主数字：加粗 + 深色，另外两个次级灰 */
-  .dtable.dtable-taxon td:nth-child(4) { font-weight: 700; color: var(--text); }
-  /* 序号没必要；近两年 / 疑问为空时整格隐藏（桌面仍显示「—」占位，见 taxonRow 的 data-blank）。
-     列宽是固定的，格子空着也照样占位 —— 正是靠这点保证各行数字纵向对齐。 */
-  .dtable.dtable-taxon td:first-child,
-  .dtable.dtable-taxon td[data-blank='1'] { display: none; }
+  /* 本时段是这一行的主数字：加粗 + 深色 */
+  .dtable.dtable-taxon td:nth-child(4) { color: var(--text); font-weight: 700; }
+  /* 疑问格的红色要单独提一次：上面 `td[data-label]` 是三个类，会盖过
+     `.dtable td.is-doubt`（两个类）的红色，不补这条「疑问」就变灰了。 */
+  .dtable.dtable-taxon td[data-label].is-doubt { color: #cf2020; }
+
+  /* 序号没必要。⚠「近两年 / 疑问」**没有数据也照常显示「—」**：
+     整格藏掉会让三列时有时无、每行右边缘参差不齐（用户明确要求一直显示）。
+     恒显 + 固定列宽，才是干净的三个格子。 */
+  .dtable.dtable-taxon td:first-child { display: none; }
 
   /* 拼图：勾选条允许换行、格子收紧。一格一种，窄屏一行能放下 3~4 个，
      科多的时候整页才不会长到没法看。 */
