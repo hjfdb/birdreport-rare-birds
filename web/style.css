@@ -449,6 +449,19 @@ input[type="search"] { min-width: 200px; }
 .mw-state { flex: none; white-space: nowrap; font-size: 12.5px; font-weight: 550; color: var(--text-2); }
 .mw-switch input:checked ~ .mw-state { color: var(--green); }
 
+/* 稀有监听那一行的「测试发送」（仅作者可见的排查入口）：
+   行网格加一列 auto，开关仍然靠自己那列的最右边，按钮紧跟其后。 */
+.my-row-watch { grid-template-columns: 74px minmax(0, 1fr) auto; }
+.mw-test {
+  height: 28px; padding: 0 9px; white-space: nowrap; cursor: pointer;
+  font-size: 12px; font-weight: 550; color: var(--text-2);
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  -webkit-tap-highlight-color: transparent;
+}
+.mw-test:hover { border-color: var(--primary); color: var(--primary); }
+.mw-test:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.mw-test[hidden] { display: none; }
+
 /* 说明文字（跟着所属设置项，逐条成行，不再挤成一整段）
    —— 版本那一行的说明「没事就不出现」，所以要有显式的隐藏规则 */
 .mw-hint { margin: 9px 0 0; font-size: 12px; line-height: 1.75; color: var(--muted); }

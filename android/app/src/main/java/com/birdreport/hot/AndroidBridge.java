@@ -5,9 +5,11 @@ import android.webkit.JavascriptInterface;
 /**
  * 给网页端用的一层**很薄**的桥（注册名 {@code window.BirdAndroid}）。
  *
- * 只有三件事必须由原生侧做，其余全在网页那边：
+ * 只有几件事必须由原生侧做，其余全在网页那边：
  *   · 通知权限（targetSdk 33 起 POST_NOTIFICATIONS 是运行时权限，网页要不了）；
  *   · 把「监听开着没」同步给后台轮询线程（见 {@link WatchNotifier} 的类注释）；
+ *   · 发系统通知 —— 轮询那一侧自己发，另外留一个手动入口给作者排查链路
+ *     （见 {@link #testNotify()}）；
  *   · 应用内更新：把下好的 APK 交给系统安装器（见 {@link #installApk}）。
  *
  * 网页端每次都先用 {@code window.BirdAndroid && BirdAndroid.isAndroid()} 判断，
@@ -59,6 +61,17 @@ public class AndroidBridge {
     @JavascriptInterface
     public void syncWatch(boolean enabled, int intervalMs) {
         notifier.sync(enabled, intervalMs);
+    }
+
+    /**
+     * 手动发一条系统通知（「我的 → 稀有监听 → 测试发送」，仅作者可见的调试入口）。
+     *
+     * @return {@code "sent"} / {@code "missing"} / {@code "blocked"} / {@code "error:…"}，
+     *         含义见 {@link WatchNotifier#postTest()}。页面据此提示用户下一步该干什么。
+     */
+    @JavascriptInterface
+    public String testNotify() {
+        return notifier.postTest();
     }
 
     /**

@@ -306,7 +306,7 @@
                「稀有」= 该地区最近两年记录数 ≤ 这个数量 —— 是个**绝对**条数，
                大范围（北京市最少 95 条 / 全国 286 条）下默认的 3 条永远命中不了，
                所以数量可调，下面的说明里会把「本时段最稀有的也有 N 条」摊开来讲。 -->
-          <div class="my-row">
+          <div class="my-row my-row-watch">
             <span class="mw-label">
               <svg class="mw-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -320,6 +320,10 @@
               <span class="mw-track" aria-hidden="true"><span class="mw-knob"></span></span>
               <span class="mw-state" id="mwSwitchText">监听中</span>
             </label>
+            <!-- 排查用：立刻发一条系统通知，用来区分「通知发不出来」与「轮询没跑 / 没发现新鸟种」。
+                 只有绑定名称是 kkia 且跑在 Android 壳里才出现（浏览器里没有系统通知这回事）。 -->
+            <button class="mw-test" id="btnWatchTest" type="button" hidden
+              title="立刻发一条系统通知，确认通知链路是通的">测试发送</button>
           </div>
           <div class="my-row">
             <label for="selWatchThreshold">稀有数量</label>

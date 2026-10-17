@@ -34,7 +34,8 @@ const STANDALONE = !location.protocol.startsWith('http');
 
 /**
  * Android 壳（APK）注入的桥，只有那里面才有；浏览器 / exe 里是 null。
- * 目前只用它做两件事：申请通知权限、把「监听开着没」同步给后台轮询线程。
+ * 目前只用它做几件事：申请通知权限、把「监听开着没」同步给后台轮询线程、
+ * 手动发一条测试通知（排查用）、把下好的 APK 交给系统安装器。
  * 每次调用都要经它判空 —— 网页端不能因为拿不到桥就报错。
  */
 const ANDROID = (() => {
@@ -2652,6 +2653,10 @@ function syncWatchRow() {
   const sel = $('selWatchThreshold');
   const hint = $('watchRowHint');
   if (!chk || !sel || !hint) return;
+  // 「测试发送」只对作者（绑定名称 kkia）且跑在 Android 壳里时露出来：
+  // 浏览器里没有系统通知，按钮显示出来只会让人以为它坏了。
+  const testBtn = $('btnWatchTest');
+  if (testBtn) testBtn.hidden = !(ANDROID && state.lifer === 'kkia');
   const w = watchUi.snapshot;
   const on = !!(w && w.enabled);
 
@@ -2804,6 +2809,34 @@ function ensureNotifyPermission() {
     if (ANDROID.notifyState && ANDROID.notifyState() === 'granted') return;
     if (ANDROID.requestNotify) ANDROID.requestNotify();
   } catch (e) { /* ignore */ }
+}
+
+/**
+ * 「我的 → 稀有监听 → 测试发送」（仅作者可见的排查入口）。
+ *
+ * 它走的是与真实提醒**同一条**发通知的路子（WatchNotifier.postTest），但不经过「轮询有没有
+ * 跑、这一轮有没有新发现」—— 所以一下就能把两类故障分开：
+ *   · 点了就有通知 → 通知链路没问题，问题在后台轮询（什么时候跑、跑了没发现）；
+ *   · 点了也没通知 → 权限 / 系统设置 / 通知渠道那一层的问题。
+ */
+function onWatchTestClick() {
+  if (!ANDROID) return;
+  let res = 'no-bridge';
+  try {
+    res = String(ANDROID.testNotify ? ANDROID.testNotify() : 'no-bridge');
+  } catch (e) {
+    res = 'error:' + e.message;
+  }
+  if (res === 'sent') {
+    showToast('测试通知已发出，下拉看看通知栏');
+  } else if (res === 'missing') {
+    showToast('通知权限还没给，正在申请…');
+    ensureNotifyPermission();
+  } else if (res === 'blocked') {
+    showToast('系统通知被关掉了：设置 → 应用 → 啾讯 → 通知，重新打开');
+  } else {
+    showToast('测试通知没发出去：' + res);
+  }
 }
 
 /**
@@ -4288,6 +4321,7 @@ function bind() {
     if (watchUi.enabled) watchStart({ reconfig: true });
     else syncWatchRow();
   });
+  $('btnWatchTest').addEventListener('click', onWatchTestClick);
   // ---- 版本与更新（只在「我的」里用）----
   $('btnVersion').addEventListener('click', onVersionClick);
   $('upClose').addEventListener('click', () => closeUpdateModal());

@@ -252,6 +252,33 @@ public class WatchNotifier {
      * 发通知
      * ---------------------------------------------------------------- */
 
+    /**
+     * 手动发一条测试通知（网页端「我的 → 稀有监听 → 测试发送」，仅作者可见）。
+     *
+     * <p>目的：把「通知发不出来」和「轮询没跑 / 这一轮没发现新鸟种」这两种完全不同的故障分开。
+     * 它走的是同一套 NotificationManager 调用、同一个通知渠道，但完全不依赖轮询有没有跑起来，
+     * 所以点一下就知道通知链路本身通不通。
+     *
+     * @return {@code "sent"} 已发出 / {@code "missing"} Android 13+ 的运行时权限没给 /
+     *         {@code "blocked"} 用户在系统设置里把本应用的通知关了 /
+     *         {@code "error:…"} 其它失败
+     */
+    public String postTest() {
+        ensureChannel(app);
+        if (!"granted".equals(permissionState(app))) {
+            return "missing";
+        }
+        if (!canNotify(app)) {
+            return "blocked"; // areNotificationsEnabled() == false
+        }
+        boolean ok = post(
+                "啾讯 · 测试通知",
+                "通知链路正常",
+                "点这条通知会回到应用并打开「监听历史记录」。\n" +
+                        "真正发现稀有鸟种时，这里会列出鸟种名与本时段 / 近两年的条数。");
+        return ok ? "sent" : "error:NotificationManager 抛异常（见 logcat -s BirdWatch）";
+    }
+
     private void post(JSONArray alerts) {
         int n = alerts.length();
         StringBuilder names = new StringBuilder();
@@ -283,10 +310,14 @@ public class WatchNotifier {
         String title = "发现 " + n + " 种稀有鸟种";
         // 折叠态：最多列两种，多了用「等」
         String brief = names.length() <= 24 ? names.toString() : names.substring(0, 24) + "…";
+        post(title, brief, big.toString());
+    }
 
+    /** 真正把通知交给系统。@return 是否发出去了（false = 抛异常，已写 logcat） */
+    private boolean post(String title, String brief, String big) {
         NotificationManager nm = (NotificationManager) app.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) {
-            return;
+            return false;
         }
 
         Intent open = new Intent(app, MainActivity.class);
@@ -317,8 +348,10 @@ public class WatchNotifier {
         }
         try {
             nm.notify(NOTIFY_ID, b.build());
+            return true;
         } catch (Throwable t) {
             Log.w(TAG, "发通知失败：" + t);
+            return false;
         }
     }
 }
