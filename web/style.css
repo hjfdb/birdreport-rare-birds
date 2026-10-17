@@ -1253,29 +1253,56 @@ button.pz-tile:focus-visible { outline: 2px solid var(--lifer); outline-offset: 
   /* 保护等级列是徽章组，跟在数字后面会显得零散，单独起一行并去掉上边距 */
   .dtable:not(.dtable-report) td:nth-child(7) .badges { margin-top: 0; }
 
-  /* 鸟种明细：不走上面的通用堆叠，改用**报告详情那种紧凑卡片**（参考 rp-item 的排版）：
-     ① 名字 + 徽章组（未加新 / 等级 / 特有 / IUCN）…… 本时段记录贴右
-     ② 学名（名字格的第二行 —— 名字格跨两行，徽章自然与名字同行）
-     ③ 目 · 科 ｜ 近两年 ｜ 疑问
+  /* 鸟种明细：不走上面的通用堆叠，改用**紧凑卡片**（参考报告详情 rp-item 的排版）：
+     ① 名字 + 徽章组（未加新 / 等级 / 特有 / IUCN）… 学名（同一格的第二行）
+     ② 目 · 科 …………………… 本时段 ｜ 近两年 ｜ 疑问
+     ⚠ 三个数字**必须同一行、各自独立列、右对齐**，且**行与行之间也要对齐**。
+       这里有两个坑，都踩过：
+       ▸ 坑一：`grid-template-areas` 里每个命名区域必须是**矩形**。曾经写成
+         'name name name name' / 'name . . .'（第 1 行占 4 列、第 2 行只占 1 列），
+         不是矩形 → 整条声明被解析器丢弃 → 退化成自动放置 → 单元格全部挤成一坨。
+         所以 name 只跨第 1 行（占满 4 列，单行天然是矩形），数字放第 2 行各占一格。
+       ▸ 坑二：每个 `<tr>` 是各自独立的 grid 容器，`auto` 列宽会按**各行自己的内容**
+         分别计算 —— 单行内看着齐，行与行之间照样错位。所以三个数字列用**固定 px 宽**，
+         所有行的列几何完全一致，纵向才扫得过去。
      整行可点 → 鸟种档案，行尾不再有「介绍 ›」。徽章并入名字行后表格只剩 6 列。 */
   .dtable.dtable-taxon tbody tr {
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr) 44px 44px 44px;
     grid-template-areas:
-      'name count .'
-      'name .    .'
-      'of   hist doubt';
+      'name name name name'
+      'of   c1   c2   c3';
     align-items: start;
     column-gap: 8px;
-    row-gap: 2px;
+    row-gap: 3px;
     padding: 10px 4px 9px;
+    border-bottom: 1px solid var(--border);
   }
   .dtable.dtable-taxon td:nth-child(2) { grid-area: name; }
-  .dtable.dtable-taxon td:nth-child(3) { grid-area: of; align-self: end; }
-  .dtable.dtable-taxon td:nth-child(4) { grid-area: count; }
-  .dtable.dtable-taxon td:nth-child(5) { grid-area: hist; text-align: left; align-self: end; }
-  .dtable.dtable-taxon td:nth-child(6) { grid-area: doubt; align-self: end; }
-  /* 序号没必要；疑问为空时整格隐藏（桌面仍显示「—」占位，见 taxonRow 的 data-blank） */
+  .dtable.dtable-taxon td:nth-child(3) { grid-area: of; }
+  .dtable.dtable-taxon td:nth-child(4) { grid-area: c1; }
+  .dtable.dtable-taxon td:nth-child(5) { grid-area: c2; }
+  .dtable.dtable-taxon td:nth-child(6) { grid-area: c3; }
+  /* 三个数字：列名压成小字单独一行顶在上面、数字在下面右对齐。
+    表头在窄屏是隐藏的，不补列名就是三个没人认得的数字。 */
+  .dtable.dtable-taxon td[data-label]::before {
+    display: block; content: attr(data-label);
+    color: var(--muted); font-size: 10px; font-weight: 400;
+    line-height: 1.25; margin-bottom: 1px;
+  }
+  /* 三格字号 / 行高必须**完全一致**：只要有一个字号不同，行高就不同，
+     顶端和基线都会错开 —— 正是「数据没对齐」的观感来源。
+     主次改用字重 + 颜色表达，不动字号。 */
+  .dtable.dtable-taxon td:nth-child(4),
+  .dtable.dtable-taxon td:nth-child(5),
+  .dtable.dtable-taxon td:nth-child(6) {
+    text-align: right; white-space: nowrap;
+    font-size: 13px; line-height: 1.35;
+  }
+  /* 本时段是主数字：加粗 + 深色，另外两个次级灰 */
+  .dtable.dtable-taxon td:nth-child(4) { font-weight: 700; color: var(--text); }
+  /* 序号没必要；近两年 / 疑问为空时整格隐藏（桌面仍显示「—」占位，见 taxonRow 的 data-blank）。
+     列宽是固定的，格子空着也照样占位 —— 正是靠这点保证各行数字纵向对齐。 */
   .dtable.dtable-taxon td:first-child,
   .dtable.dtable-taxon td[data-blank='1'] { display: none; }
 
